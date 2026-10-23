@@ -1,5 +1,7 @@
 namespace Dougong.Kernel;
 
+using System.Threading.Channels;
+
 internal sealed record ServiceKey(Type ServiceType, string? Name);
 
 internal sealed class ServiceTable
@@ -86,6 +88,8 @@ public sealed partial class DougongKernel : IAsyncDisposable
     private readonly Dictionary<PluginId, PluginEntry> _entries = [];
     private readonly ServiceTable _services = new();
     private readonly List<Action<PluginStateChange>> _stateObservers = [];
+    private readonly List<RevisionSubscription> _revisionSubscriptions = [];
+    private long _revision;
     private readonly EventBus _events;
     private readonly AsyncLocal<CallbackScope?> _callback = new();
     private bool _disposed;
@@ -111,6 +115,30 @@ public sealed partial class DougongKernel : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(observer);
         lock (_stateObservers) { _stateObservers.Add(observer); }
         return new StateSubscription(this, observer);
+    }
+
+    /// <summary>
+    /// 原子取得状态快照与其后的增量流。快照与订阅在同一临界区内建立，
+    /// 因此调用方先应用快照再消费增量不会丢状态。
+    /// </summary>
+    public KernelStateView SubscribeStates(int capacity = 256)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var revision = _revision;
+            var snapshot = new List<PluginHandle>(_entries.Values.Select(ToHandle));
+            var channel = Channel.CreateBounded<StateDelta>(new BoundedChannelOptions(capacity)
+            {
+                SingleReader = true,
+                SingleWriter = false,
+                FullMode = BoundedChannelFullMode.Wait,
+            });
+            var subscription = new RevisionSubscription(this, channel, capacity);
+            _revisionSubscriptions.Add(subscription);
+            return new KernelStateView(revision, snapshot, subscription.ReadAllAsync(), subscription);
+        }
     }
 
     public ValueTask<IReadOnlyList<PluginHandle>> GetPluginsAsync(CancellationToken cancellationToken = default)
@@ -518,7 +546,24 @@ public sealed partial class DougongKernel : IAsyncDisposable
     {
         if (changes.Count == 0) return;
         Action<PluginStateChange>[] observers;
+        RevisionSubscription[] revisions;
+        List<StateDelta>? deltas = null;
         lock (_stateObservers) { observers = [.. _stateObservers]; }
+        lock (_sync)
+        {
+            revisions = [.. _revisionSubscriptions];
+            if (revisions.Length > 0)
+            {
+                deltas = new List<StateDelta>(changes.Count);
+                foreach (var change in changes)
+                    deltas.Add(new StateDelta(++_revision, change));
+            }
+            else
+            {
+                _revision += changes.Count;
+            }
+        }
+
         using (EnterCallback())
         {
             foreach (var change in changes)
@@ -526,9 +571,25 @@ public sealed partial class DougongKernel : IAsyncDisposable
                     try { observer(change); }
                     catch (Exception ex) { LastObserverError = ex; }
         }
+
+        if (deltas is null) return;
+        foreach (var subscription in revisions)
+            foreach (var delta in deltas)
+                subscription.TryPublish(delta);
     }
 
     private void OnEventHandlerError(Exception ex) => LastObserverError = ex;
+
+    internal long MarkRevisionOverflow(RevisionSubscription subscription, string reason)
+    {
+        LastObserverError = new InvalidOperationException(reason);
+        lock (_sync) { return _revision; }
+    }
+
+    internal void RemoveRevisionSubscription(RevisionSubscription subscription)
+    {
+        lock (_sync) { _revisionSubscriptions.Remove(subscription); }
+    }
 
     private void EnsureLifecycleCallAllowed()
     {
