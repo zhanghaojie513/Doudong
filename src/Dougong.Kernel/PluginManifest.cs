@@ -18,6 +18,35 @@ public sealed record ServiceRequirement(
 }
 
 /// <summary>
+/// 插件对某个共享契约的版本支持范围。M0 只支持「主版本相同且不低于最低次版本」的
+/// <c>major.minor</c> 形式，不做完整 SemVer 区间解析。
+/// </summary>
+public sealed record ContractVersion(string ContractName, string Range)
+{
+    /// <summary>宿主契约版本是否落在声明范围内。</summary>
+    public bool IsSatisfiedBy(Version hostVersion)
+    {
+        var (major, minor) = Parse();
+        return hostVersion.Major == major && hostVersion.Minor >= minor;
+    }
+
+    internal (int Major, int Minor) Parse()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(Range);
+        var parts = Range.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2
+            || !int.TryParse(parts[0], out var major)
+            || !int.TryParse(parts[1], out var minor))
+        {
+            throw new FormatException(
+                $"契约版本范围 '{Range}' 无效；M0 仅支持 'major.minor' 形式。");
+        }
+
+        return (major, minor);
+    }
+}
+
+/// <summary>
 /// 插件清单。版本约束与程序集兼容检查属于加载层，这里只表达运行时所需的最小信息。
 /// <see cref="DependsOn"/> 是插件级依赖：被依赖插件必须已激活，本插件才能激活。
 /// </summary>
@@ -27,13 +56,16 @@ public sealed record PluginManifest
         PluginId id,
         string version,
         IReadOnlyList<ServiceRequirement>? requiredServices = null,
-        IReadOnlyList<PluginId>? dependsOn = null)
+        IReadOnlyList<PluginId>? dependsOn = null,
+        IReadOnlyList<ContractVersion>? contractVersions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(version);
         Id = id;
         Version = version;
         RequiredServices = requiredServices ?? [];
         DependsOn = dependsOn ?? [];
+        ContractVersions = contractVersions ?? [];
+        foreach (var contract in ContractVersions) contract.Parse();
     }
 
     public PluginId Id { get; }
@@ -46,6 +78,9 @@ public sealed record PluginManifest
     /// <summary>必须已处于 <see cref="PluginState.Active"/> 的插件。</summary>
     public IReadOnlyList<PluginId> DependsOn { get; }
 
+    /// <summary>插件声明支持的宿主契约版本范围；为空表示不做版本校验。</summary>
+    public IReadOnlyList<ContractVersion> ContractVersions { get; }
+
     public static PluginManifest Create(string id, string version, params ServiceRequirement[] requiredServices) =>
         new(PluginId.Parse(id), version, requiredServices);
 
@@ -55,4 +90,10 @@ public sealed record PluginManifest
         IReadOnlyList<ServiceRequirement> requiredServices,
         IReadOnlyList<PluginId> dependsOn) =>
         new(PluginId.Parse(id), version, requiredServices, dependsOn);
+
+    public static PluginManifest CreateWithContracts(
+        string id,
+        string version,
+        IReadOnlyList<ContractVersion> contractVersions) =>
+        new(PluginId.Parse(id), version, contractVersions: contractVersions);
 }

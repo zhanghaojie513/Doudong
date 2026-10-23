@@ -117,6 +117,13 @@ public sealed partial class DougongKernel : IAsyncDisposable
 
     public IResolver Resolver { get; }
 
+    /// <summary>宿主提供的共享契约版本；插件可在清单里声明所需的兼容范围。</summary>
+    public static IReadOnlyDictionary<string, Version> ContractVersions { get; } =
+        new Dictionary<string, Version>(StringComparer.Ordinal)
+        {
+            ["Dougong.Kernel"] = typeof(DougongKernel).Assembly.GetName().Version ?? new Version(0, 1),
+        };
+
     /// <summary>等待受影响批次在途调用结束的预算；超时后不执行清理并保留诊断。</summary>
     public TimeSpan DrainTimeout { get; set; } = TimeSpan.FromSeconds(30);
 

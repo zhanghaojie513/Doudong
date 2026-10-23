@@ -26,6 +26,7 @@ public sealed partial class DougongKernel
             var assembly = context.LoadFromAssemblyPath(fullPath);
             var pluginType = FindPluginType(assembly, typeName);
             var manifest = ReadManifest(pluginType);
+            EnsureContractsCompatible(manifest);
             var loaded = new LoadedPlugin(context, pluginType, manifest.Id);
             var handle = await RegisterCoreAsync(
                 () => CreatePlugin(loaded), manifest, loaded, cancellationToken).ConfigureAwait(false);
@@ -131,6 +132,34 @@ public sealed partial class DougongKernel
 
     private static IPlugin CreatePlugin(LoadedPlugin loaded) =>
         (IPlugin)Activator.CreateInstance(loaded.PluginType)!;
+
+    /// <summary>
+    /// 校验插件声明的共享契约版本范围。未声明的契约不做限制；
+    /// 声明了但宿主未提供，或范围不匹配，都拒绝加载。
+    /// </summary>
+    private void EnsureContractsCompatible(PluginManifest manifest)
+    {
+        List<string>? problems = null;
+        foreach (var contract in manifest.ContractVersions)
+        {
+            if (!ContractVersions.TryGetValue(contract.ContractName, out var hostVersion))
+            {
+                (problems ??= []).Add($"宿主未提供契约 '{contract.ContractName}'。");
+                continue;
+            }
+
+            if (!contract.IsSatisfiedBy(hostVersion))
+            {
+                (problems ??= []).Add(
+                    $"契约 '{contract.ContractName}' 需要 {contract.Range} 及以上的兼容版本，"
+                    + $"宿主为 {hostVersion}。");
+            }
+        }
+
+        if (problems is null) return;
+        throw new InvalidOperationException(
+            $"插件 '{manifest.Id}' 的契约版本不兼容：{string.Join(" ", problems)}");
+    }
 
     /// <summary>诊断用：取得动态插件的入口程序集，供装卸测试检查加载上下文。</summary>
     internal Assembly? GetLoadedAssembly(PluginId id)

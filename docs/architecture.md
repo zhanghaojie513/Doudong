@@ -180,6 +180,8 @@ Stopped → Unloading → Unloaded（已脱离宿主，GC 回收另行验证）
 
 插件声明所有共享契约的支持范围，加载前验证，不仅检查 Kernel 主版本。M3 起使用语义化版本与 `Microsoft.DotNet.ApiCompat`，同时保留生命周期行为兼容测试；API 形状兼容不等于运行行为兼容。
 
+已实现：`PluginManifest.ContractVersions` 声明契约版本范围（M0 只支持 `major.minor`，语义为宿主主版本相同且次版本不低于声明值）；`DougongKernel.ContractVersions` 暴露宿主版本表；`LoadAsync` 在注册前校验，宿主未提供该契约或范围不符即拒载并给出具体原因。未声明契约的插件不做版本限制。完整 SemVer 区间与 ApiCompat 检查仍在 M3。
+
 ### 3.7 组合根与内核验收
 
 宿主通过静态注册入口登记随产品发布的插件工厂，通过 `LoadAsync` 登记动态插件。两者进入同一生命周期协调器；公开方法形状仍是实验性草案。工厂及实例的 ALC 引用必须随卸载释放。Agent 以 `IAgentRuntime` 服务提供会话/运行入口，存储、审批器和模型客户端为必需能力；缺失或替换期间暂停接单及后续派发，不静默切换到无审批或无持久化模式。运行入口解析及工具调用均取得作用域租约，宿主不得永久缓存可替换实现。
