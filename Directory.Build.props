@@ -10,8 +10,15 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <Version>0.1.0-alpha.1</Version>
     <Authors>Haojie Zhang</Authors>
-    <RepositoryUrl>https://github.com/placeholder/dougong</RepositoryUrl>
+    <RepositoryUrl>https://github.com/zhanghaojie513/dougong</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <!-- 每个包都带上仓库根 README，避免 NuGet 页面空白 -->
+  <ItemGroup Condition="'$(IsPackable)' != 'false'">
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="/" Visible="false" />
+  </ItemGroup>
 
 </Project>

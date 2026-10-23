@@ -9,11 +9,15 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zhanghaojie513/Doudong"><img src="https://img.shields.io/badge/repository-Doudong-2f6f5e?style=flat-square" alt="Repository"></a>
+  <a href="https://github.com/zhanghaojie513/dougong"><img src="https://img.shields.io/badge/repository-dougong-2f6f5e?style=flat-square" alt="Repository"></a>
+  <a href="https://github.com/zhanghaojie513/dougong/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/zhanghaojie513/dougong/build.yml?style=flat-square&label=build" alt="Build"></a>
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-10.0-512bd4?style=flat-square" alt=".NET 10"></a>
-  <a href="https://github.com/zhanghaojie513/Doudong/releases"><img src="https://img.shields.io/badge/version-0.1.0--alpha.1-orange?style=flat-square" alt="Version 0.1.0-alpha.1"></a>
+  <a href="https://github.com/zhanghaojie513/dougong/releases"><img src="https://img.shields.io/badge/version-0.1.0--alpha.1-orange?style=flat-square" alt="Version 0.1.0-alpha.1"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-1f883d?style=flat-square" alt="MIT License"></a>
 </p>
+
+> [!WARNING]
+> **早期开发中，暂不建议依赖。** M0 内核尚未通过最终审核，公共 API 仍是实验性草案，签名和行为可能在任意提交中变更。本仓库当前只适合阅读设计与跟踪进展，不适合作为生产依赖。首个可用版本与稳定 API 的时间点见 [实施状态](docs/status.md)。
 
 > **Dougong** 借鉴 DeepSeek Harness（dsh）的 “Everything is a Plugin” 思想，为 .NET 生态构建独立的 Agent Harness SDK。项目借鉴架构思想，不移植代码，也不是 DeepSeek 官方项目。
 
@@ -103,8 +107,8 @@ Dougong 关注的是 Agent 的**承托层**，而不是某一个模型或某一�
 ### 构建和测试
 
 ```bash
-git clone https://github.com/zhanghaojie513/Doudong.git
-cd Doudong
+git clone https://github.com/zhanghaojie513/dougong.git
+cd dougong
 
 dotnet restore Dougong.slnx
 dotnet build Dougong.slnx -c Release
