@@ -10,7 +10,6 @@
 
 <p align="center">
   <a href="https://github.com/zhanghaojie513/dougong"><img src="https://img.shields.io/badge/repository-dougong-2f6f5e?style=flat-square" alt="Repository"></a>
-  <a href="https://github.com/zhanghaojie513/dougong/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/zhanghaojie513/dougong/build.yml?style=flat-square&label=build" alt="Build"></a>
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-10.0-512bd4?style=flat-square" alt=".NET 10"></a>
   <a href="https://github.com/zhanghaojie513/dougong/releases"><img src="https://img.shields.io/badge/version-0.1.0--alpha.1-orange?style=flat-square" alt="Version 0.1.0-alpha.1"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-1f883d?style=flat-square" alt="MIT License"></a>
