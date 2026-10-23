@@ -584,6 +584,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
         {
             await Task.WhenAll(contexts.Select(RequestStopQuietlyAsync)).ConfigureAwait(false);
             await EvaluateAsync(CancellationToken.None).ConfigureAwait(false);
+            await _events.DrainAsync().ConfigureAwait(false);
             completion.SetResult();
         }
         catch (Exception ex) { completion.SetException(ex); }

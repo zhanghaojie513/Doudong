@@ -18,7 +18,7 @@ public sealed class PluginContext : IAsyncDisposable
     private readonly List<Func<CancellationToken, ValueTask>> _cleanup = [];
     private readonly CancellationTokenSource _lifetime = new();
     private readonly CancellationToken _lifetimeToken;
-    private readonly IDisposable? _scopedLifetime;
+    private readonly IAsyncDisposable? _scopedLifetime;
     private readonly Action<PluginId, PluginContext> _releaseServices;
     private bool _closed;
     private Task? _stopTask;
@@ -35,7 +35,7 @@ public sealed class PluginContext : IAsyncDisposable
         IServiceRegistry services,
         IResolver resolver,
         IEventBus events,
-        IDisposable? scopedLifetime,
+        IAsyncDisposable? scopedLifetime,
         Action<PluginId, PluginContext> releaseServices,
         Func<PluginContext, ValueTask> requestDispose)
     {
@@ -165,7 +165,7 @@ public sealed class PluginContext : IAsyncDisposable
             }
         }
 
-        try { _scopedLifetime?.Dispose(); }
+        try { if (_scopedLifetime is not null) await _scopedLifetime.DisposeAsync().ConfigureAwait(false); }
         catch (Exception ex) { errors.Add(ex); }
         try { _releaseServices(PluginId, this); }
         catch (Exception ex) { errors.Add(ex); }

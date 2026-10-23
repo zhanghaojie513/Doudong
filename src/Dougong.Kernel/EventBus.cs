@@ -1,20 +1,27 @@
 namespace Dougong.Kernel;
 
 /// <summary>
-/// 同步类型化事件总线。发布者在调用线程上执行处理器；处理器异常被隔离并上报，
-/// 不中断其他观察者或主流程。慢处理器会阻塞发布者，因此处理器只应做有界工作。
+/// 异步类型化事件总线。发布者只入队，不执行插件代码；每个订阅有独立有界队列，
+/// 队列满时断开该订阅并上报溢出。处理器异常被隔离，不影响其他订阅者。
 /// </summary>
-internal sealed class EventBus : IEventBus
+internal sealed class EventBus : IEventBus, IAsyncDisposable
 {
     private readonly object _sync = new();
-    private readonly Dictionary<Type, List<object>> _handlers = [];
+    private readonly Dictionary<Type, List<ISubscription>> _handlers = [];
     private readonly Action<Exception> _onHandlerError;
+    private readonly int _capacity;
 
-    public EventBus(Action<Exception> onHandlerError) => _onHandlerError = onHandlerError;
+    public EventBus(Action<Exception> onHandlerError, int capacity = 256)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
+        _onHandlerError = onHandlerError;
+        _capacity = capacity;
+    }
 
     public IDisposable Subscribe<TEvent>(Action<TEvent> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
+        var subscription = new EventSubscription<TEvent>(handler, _capacity, _onHandlerError);
         lock (_sync)
         {
             if (!_handlers.TryGetValue(typeof(TEvent), out var list))
@@ -23,104 +30,68 @@ internal sealed class EventBus : IEventBus
                 _handlers[typeof(TEvent)] = list;
             }
 
-            list.Add(handler);
-        }
-
-        return new Subscription(this, typeof(TEvent), handler);
-    }
-
-    public void Publish<TEvent>(TEvent evt)
-    {
-        object[] snapshot;
-        lock (_sync)
-        {
-            if (!_handlers.TryGetValue(typeof(TEvent), out var list) || list.Count == 0)
-            {
-                return;
-            }
-
-            snapshot = [.. list];
-        }
-
-        foreach (var handler in snapshot)
-        {
-            try
-            {
-                ((Action<TEvent>)handler)(evt);
-            }
-            catch (Exception ex)
-            {
-                _onHandlerError(ex);
-            }
-        }
-    }
-
-    private void Remove(Type eventType, object handler)
-    {
-        lock (_sync)
-        {
-            if (_handlers.TryGetValue(eventType, out var list))
-            {
-                list.Remove(handler);
-                if (list.Count == 0)
-                {
-                    _handlers.Remove(eventType);
-                }
-            }
-        }
-    }
-
-    private sealed class Subscription(EventBus owner, Type eventType, object handler) : IDisposable
-    {
-        private int _disposed;
-
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) == 0)
-            {
-                owner.Remove(eventType, handler);
-            }
-        }
-    }
-}
-
-/// <summary>插件作用域内的事件视图：作用域关闭时自动退订，避免插件句柄泄漏。</summary>
-internal sealed class ScopedEventBus(IEventBus inner) : IEventBus, IDisposable
-{
-    private readonly List<IDisposable> _subscriptions = [];
-    private int _disposed;
-
-    public IDisposable Subscribe<TEvent>(Action<TEvent> handler)
-    {
-        ObjectDisposedException.ThrowIf(_disposed == 1, this);
-        var subscription = inner.Subscribe(handler);
-        lock (_subscriptions)
-        {
-            _subscriptions.Add(subscription);
+            list.Add(subscription);
         }
 
         return subscription;
     }
 
-    public void Publish<TEvent>(TEvent evt) => inner.Publish(evt);
-
-    public void Dispose()
+    public void Publish<TEvent>(TEvent evt)
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 1)
+        ISubscription[] snapshot;
+        lock (_sync)
         {
-            return;
+            if (!_handlers.TryGetValue(typeof(TEvent), out var list) || list.Count == 0) return;
+            snapshot = [.. list];
         }
 
-        IDisposable[] pending;
-        lock (_subscriptions)
+        List<ISubscription>? overflowed = null;
+        foreach (var subscription in snapshot)
         {
-            pending = [.. _subscriptions];
-            _subscriptions.Clear();
+            if (!subscription.TryPublish(evt)) (overflowed ??= []).Add(subscription);
         }
 
-        foreach (var subscription in pending)
+        if (overflowed is null) return;
+        foreach (var subscription in overflowed)
         {
-            subscription.Dispose();
+            _onHandlerError(new InvalidOperationException(
+                $"事件订阅队列已满（容量 {_capacity}），订阅被断开；订阅方需要重新获取快照。"));
+            Remove(subscription);
         }
+    }
+
+    private void Remove(ISubscription subscription)
+    {
+        lock (_sync)
+        {
+            if (!_handlers.TryGetValue(subscription.EventType, out var list)) return;
+            list.Remove(subscription);
+            if (list.Count == 0) _handlers.Remove(subscription.EventType);
+        }
+
+        subscription.Dispose();
+    }
+
+    /// <summary>停止所有订阅并等待已入队事件处理完毕。</summary>
+    public async Task DrainAsync()
+    {
+        ISubscription[] snapshot;
+        lock (_sync)
+        {
+            snapshot = [.. _handlers.Values.SelectMany(list => list)];
+            _handlers.Clear();
+        }
+
+        foreach (var subscription in snapshot) subscription.Dispose();
+        await Task.WhenAll(snapshot.Select(s => s.CloseAsync())).ConfigureAwait(false);
+    }
+
+    public ValueTask DisposeAsync() => new(DrainAsync());
+
+    internal interface ISubscription : IDisposable, IAsyncDisposable
+    {
+        Type EventType { get; }
+        bool TryPublish(object? evt);
+        Task CloseAsync();
     }
 }
