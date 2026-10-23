@@ -49,14 +49,26 @@ internal sealed class ServiceTable
         }
     }
 
+    /// <summary>
+    /// 判断需求是否满足。指定 <see cref="ServiceRequirement.ProviderId"/> 时只匹配该提供方；
+    /// 否则要求恰好一个提供方，多个视为歧义。
+    /// </summary>
     public bool IsSatisfied(ServiceRequirement requirement, out string? reason)
     {
         var matches = Find(requirement.ServiceType, requirement.Name);
+        if (requirement.ProviderId is { } required)
+        {
+            matches = [.. matches.Where(e => e.Owner == required)];
+        }
+
         reason = matches.Count switch
         {
             1 => null,
+            0 when requirement.ProviderId is { } id =>
+                $"未找到由插件 {id} 提供的服务 {requirement.ServiceType.Name}({requirement.Name})。",
             0 => $"未找到服务 {requirement.ServiceType.Name}({requirement.Name})。",
-            _ => $"服务 {requirement.ServiceType.Name} 存在 {matches.Count} 个提供方，需求不唯一。",
+            _ => $"服务 {requirement.ServiceType.Name} 存在 {matches.Count} 个提供方，需求不唯一；"
+                + "请指定 ProviderId 或为提供方命名。",
         };
         return matches.Count == 1;
     }
@@ -518,10 +530,33 @@ public sealed partial class DougongKernel : IAsyncDisposable
                 && entry.Context is { IsClosed: false }
                 && entry.PendingServices.TryGetValue(new ServiceKey(serviceType, name), out var pending))
             {
-                return [.. committed, new ServiceTable.ServiceEntry(owner, generation, pending)];
+                committed = [.. committed, new ServiceTable.ServiceEntry(owner, generation, pending)];
             }
+
+            // 消费方声明了 ProviderId 时，按该提供方过滤，避免同键多提供方被判为歧义。
+            if (_entries.TryGetValue(owner, out var consumer)
+                && PreferredProvider(consumer, serviceType, name) is { } preferred)
+            {
+                return [.. committed.Where(e => e.Owner == preferred)];
+            }
+
             return committed;
         }
+    }
+
+    private static PluginId? PreferredProvider(PluginEntry consumer, Type serviceType, string? name)
+    {
+        foreach (var requirement in consumer.Manifest.RequiredServices)
+        {
+            if (requirement.ProviderId is { } provider
+                && requirement.ServiceType == serviceType
+                && string.Equals(requirement.Name, name, StringComparison.Ordinal))
+            {
+                return provider;
+            }
+        }
+
+        return null;
     }
 
     private PluginEntry RequireEntry(PluginId id) => _entries.TryGetValue(id, out var entry)

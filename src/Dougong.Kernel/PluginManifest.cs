@@ -4,8 +4,18 @@ namespace Dougong.Kernel;
 /// 一条服务需求。它属于消费方，可以指向当前尚不存在的提供方：
 /// 内核保存未满足的需求，用于后续重新评估。<see cref="Optional"/> 为 true 时，
 /// 缺失不会阻止激活，但提供方后续出现时仍会触发重新评估。
+/// <see cref="ProviderId"/> 非空时表示同键多提供方中只接受该插件，
+/// 用于显式消解歧义；此时不再按唯一性判断。
 /// </summary>
-public sealed record ServiceRequirement(Type ServiceType, string? Name = null, bool Optional = false);
+public sealed record ServiceRequirement(
+    Type ServiceType,
+    string? Name = null,
+    bool Optional = false,
+    PluginId? ProviderId = null)
+{
+    /// <summary>该需求是否排斥除 <paramref name="owner"/> 之外的提供方。</summary>
+    public bool Accepts(PluginId owner) => ProviderId is not { } required || required == owner;
+}
 
 /// <summary>
 /// 插件清单。版本约束与程序集兼容检查属于加载层，这里只表达运行时所需的最小信息。
