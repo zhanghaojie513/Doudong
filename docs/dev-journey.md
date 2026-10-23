@@ -253,11 +253,112 @@ README 与状态板写“126 项”，实际是 128；再后来变成 140、143�
 - `%TEMP%/dougong-review2`、`dougong-review2b`、`dougong-review2c` — 第二轮复审
 - `%TEMP%/dougong-alc-probe`、`dougong-alc-runner` — ALC 引用根
 - `%TEMP%/dougong-final-review` — 最终复审
+- `%TEMP%/dougong-evidence-r1` — 用当前 DLL 复跑第一轮场景（证据留档用）
 
 这些工程的价值在于：**它们不共享测试宿主的隐式前提，只能走公开入口**，因此比单元测试更接近“外部可观察行为”。这一点本身也值得写。
 
+### 临时目录不可依赖
+
+上面这些工程全在 `%TEMP%` 下，重启或清理后可能消失，且不在版本控制内。因此把关键输出直接摘录在下面，保证文章素材自带证据。
+
 ---
 
-## 七、一句话结论
+## 七、实测输出留档（2026-10-23，当前 HEAD `0f4cd06`）
+
+所有输出均使用 Release DLL，由独立进程执行。格式为 `场景: 实际输出`。
+
+### 7.1 第一轮审核场景（修复后复跑）
+
+```text
+R1 r1-timedout-activate: state=Failed, retry=InvalidOperationException,
+   serviceMissing=True, invocationRunning=True
+R1 resolveall: count=2, names=low+high
+R1 cleanup-order: high,consumer,low (consumer-before-low=True)
+```
+
+对应三个原缺陷：
+
+- **排空超时后再激活**——修复前 `Activate` 返回 `Stopped`、`activations=1`、服务缺失但无障碍返回；修复后返回 `Failed` 且重试抛 `InvalidOperationException`。注意 `invocationRunning=True` 保留在输出里，如实反映“超时只结束宿主等待，不终止插件”。
+- **`ResolveAll` 只返回一个提供方**——修复前 `count=1, names=high`；修复后 `count=2`。
+- **清理顺序**——`consumer-before-low=True`。这里 `high` 排在 `consumer` 之前是**正确**的：`high` 是晚到的第三方提供方，与 `consumer` 之间不存在依赖边，二者顺序无关。最初的判断以为这仍是缺陷，加断言核对后才确认算法没错。这条本身也是素材：**看输出顺序就下结论，容易误判**。
+
+### 7.2 第二轮审核场景（修复后复跑）
+
+```text
+state-stream-after-dispose: completed=True
+foreign-flow-bare-resolve: error=InvalidOperationException, value=null
+negative-history-limit: ArgumentOutOfRangeException
+last-observer-error: type=CustomPluginException, sameInstance=False
+cleanup-timeout: providerCleanedWhileConsumerRunning=False, order=[consumer-started]
+deactivate-blocking-cancel-callback: boundedByCancellationTimeout=True, state=Failed
+cleanup-token: canBeCanceled=True
+```
+
+修复前对应的实测值：
+
+```text
+state-stream-after-dispose: completed=False
+foreign-flow-bare-resolve: error=none, value=scoped
+negative-history-limit: 注册时才抛 ArgumentException
+last-observer-error: sameInstance=True（持有插件异常对象）
+cleanup-timeout: providerCleanedWhileConsumerRunning=True, order=[consumer-started,provider-cleanup]
+deactivate-blocking-cancel-callback: boundedByCancellationTimeout=False, state=Deactivating
+cleanup-token: canBeCanceled=False
+```
+
+### 7.3 ALC 引用根
+
+```text
+retained-snapshot: assemblyAlive=False summaryCount=1
+retained-manifest: assemblyAlive=True (expected True: explicit opt-in)
+```
+
+修复前同一场景：`retained-handle: assemblyAlive=True`。
+
+含义：保留卸载前取得的句柄或快照不再阻止程序集回收；显式取回完整清单仍会钉住，这是设计上要求调用方主动承担的选择。
+
+### 7.4 共享契约漏配
+
+修复后：
+
+```text
+load threw: LifecycleConfigurationException:
+  无法加载程序集 'Dougong.Sample.Shared, Version=0.1.0.0...'。
+  若它是宿主与插件共享的契约，请在加载前调用 DougongKernel.RegisterSharedContract 登记；
+  否则请确认该依赖随插件一同部署。
+entries after load: 0
+```
+
+修复前：`Failed` 状态 + 底层 file-not-found + 条目留存且 `UnloadAsync` 拒绝（只能重启宿主）。
+
+### 7.5 并发与稳定性
+
+```text
+concurrent-act-deact: completed=True, activations=1, finalState=Stopped
+dispose-vs-deactivate: completed=True, cleanups=1
+double-unload: second=KeyNotFoundException
+```
+
+以及溢出重复报告：修复前重复运行 5 轮时出现 `Assert.Single() Failure: The collection contained 3 items`；修复后连续 5 轮全绿。
+
+### 7.6 测试与构建基线
+
+```text
+dotnet build Dougong.slnx -c Release    0 警告 0 错误
+dotnet test  Dougong.slnx -c Release    148 通过 0 失败 0 跳过
+dotnet pack                             6 个 nupkg
+```
+
+---
+
+## 八、新增素材：审查输出本身也会误判
+
+复跑第一轮场景时，`cleanup-order` 输出 `high,consumer,low`，第一反应是“清理顺序仍然错了”。但加一条断言 `consumer-before-low` 后确认：`consumer` 确实先于它实际使用的 `low`；`high` 与 `consumer` 之间没有依赖边，先后无关。
+
+这条值得单独写，因为它和整个文档的主题同构：**看现象就下结论，和“编译通过就算完成”是同一种错误**。区别只是前者发生在人身上，后者发生在流程里。
+
+---
+
+## 九、一句话结论
 
 M0 的产出不是一个能跑的 Agent，而是一个**能在失败时保持诚实的内核**：失败就隔离、超时就有界、卸载不伪报、快照不钉住程序集。这些性质没有一条能靠“编译通过”验证，全部靠故障注入和独立探测拿到实证。
