@@ -9,22 +9,20 @@ internal sealed class ServiceTable
 
     internal sealed record ServiceEntry(PluginId Owner, long Generation, object Instance);
 
-    public void Add(PluginId owner, long generation, Type serviceType, string? name, object instance)
+    public void Publish(PluginId owner, long generation, IReadOnlyDictionary<ServiceKey, object> services)
     {
         lock (_sync)
         {
-            var key = new ServiceKey(serviceType, name);
-            if (!_entries.TryGetValue(key, out var list))
+            foreach (var (key, instance) in services)
             {
-                list = [];
-                _entries[key] = list;
-            }
-            else if (list.Exists(e => e.Owner == owner && e.Generation == generation))
-            {
-                throw new InvalidOperationException($"插件 '{owner}' 在本次激活中重复注册服务 '{serviceType.Name}'。");
-            }
+                if (!_entries.TryGetValue(key, out var list))
+                {
+                    list = [];
+                    _entries[key] = list;
+                }
 
-            list.Add(new ServiceEntry(owner, generation, instance));
+                list.Add(new ServiceEntry(owner, generation, instance));
+            }
         }
     }
 
@@ -72,13 +70,14 @@ internal sealed class PluginEntry
     public bool CleanupFailed { get; set; }
     public long Generation { get; set; }
     public PluginContext? Context { get; set; }
+    public Dictionary<ServiceKey, object> PendingServices { get; } = [];
 }
 
 /// <summary>
 /// 插件内核。状态由短临界区保护，生命周期回调由重评估器串行执行。
 /// 插件回调可以查询状态；生命周期变更须由宿主在回调之外发起。
 /// </summary>
-public sealed class DougongKernel : IAsyncDisposable
+public sealed partial class DougongKernel : IAsyncDisposable
 {
     private readonly object _sync = new();
     private readonly SemaphoreSlim _reconcile = new(1, 1);
@@ -90,7 +89,13 @@ public sealed class DougongKernel : IAsyncDisposable
     private bool _disposed;
     private Task? _disposeTask;
 
-    public DougongKernel() => _events = new EventBus(OnEventHandlerError);
+    public DougongKernel()
+    {
+        _events = new EventBus(OnEventHandlerError);
+        Resolver = new ServiceResolver(this);
+    }
+
+    public IResolver Resolver { get; }
 
     /// <summary>最近一次被隔离的观察者/事件处理器异常，供宿主记录诊断。</summary>
     public Exception? LastObserverError { get; private set; }
@@ -152,7 +157,11 @@ public sealed class DougongKernel : IAsyncDisposable
         return GetHandle(id);
     }
 
-    public async ValueTask<PluginHandle> DeactivateAsync(PluginId id, CancellationToken cancellationToken = default)
+    public ValueTask<PluginHandle> DeactivateAsync(PluginId id, CancellationToken cancellationToken = default) =>
+        DeactivateGenerationAsync(id, null, cancellationToken);
+
+    private async ValueTask<PluginHandle> DeactivateGenerationAsync(
+        PluginId id, PluginContext? expectedContext, CancellationToken cancellationToken)
     {
         EnsureLifecycleCallAllowed();
         cancellationToken.ThrowIfCancellationRequested();
@@ -160,10 +169,12 @@ public sealed class DougongKernel : IAsyncDisposable
         List<PluginStateChange> changes = [];
         lock (_sync)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
             var entry = RequireEntry(id);
+            if (expectedContext is not null && !ReferenceEquals(entry.Context, expectedContext))
+                return ToHandle(entry);
+            ObjectDisposedException.ThrowIf(_disposed && expectedContext is null, this);
             entry.DesiredActive = false;
-            _services.RemoveOwner(id, entry.Generation);
+            WithdrawServices(entry);
             if (entry.Context is { } context)
             {
                 contexts.Add(context);
@@ -181,7 +192,7 @@ public sealed class DougongKernel : IAsyncDisposable
                         || dependent.State == PluginState.Deactivating) continue;
                     var missing = MissingRequirements(dependent);
                     if (missing.Count == 0) continue;
-                    _services.RemoveOwner(dependent.Id, dependent.Generation);
+                    WithdrawServices(dependent);
                     SetState(dependent, changes, PluginState.Deactivating, string.Join(" ", missing));
                     contexts.Add(dependentContext);
                     invalidated = true;
@@ -217,7 +228,7 @@ public sealed class DougongKernel : IAsyncDisposable
                             && entry.State != PluginState.Deactivating && missing.Count == 0) continue;
                         selected = entry;
                         context = entry.Context;
-                        _services.RemoveOwner(entry.Id, entry.Generation);
+                        WithdrawServices(entry);
                         SetState(entry, changes, PluginState.Deactivating,
                             entry.DesiredActive ? string.Join(" ", missing) : "用户停用。");
                         stopping = true;
@@ -243,11 +254,13 @@ public sealed class DougongKernel : IAsyncDisposable
                                 continue;
                             }
                             selected = entry;
+                            entry.PendingServices.Clear();
                             entry.Generation++;
                             var events = new ScopedEventBus(_events);
                             context = new PluginContext(entry.Id,
-                                new ScopedRegistry(this, entry.Id, entry.Generation), events, events,
-                                static (_, _) => { });
+                                new ScopedRegistry(this, entry.Id, entry.Generation),
+                                new ServiceResolver(this, entry.Id, entry.Generation), events, events,
+                                static (_, _) => { }, DisposePluginContextAsync);
                             entry.Context = context;
                             SetState(entry, changes, PluginState.Activating, "开始激活。");
                             break;
@@ -286,22 +299,25 @@ public sealed class DougongKernel : IAsyncDisposable
         lock (_sync)
         {
             stopped = _disposed || !entry.DesiredActive || context.IsClosed
-                || entry.State == PluginState.Deactivating;
+                || entry.State == PluginState.Deactivating || MissingRequirements(entry).Count > 0;
             accepted = activationError is null && !stopped && entry.Generation == generation
                 && ReferenceEquals(entry.Context, context) && entry.State == PluginState.Activating;
             if (accepted)
             {
-                SetState(entry, changes, PluginState.Active, "激活完成。");
+                _services.Publish(entry.Id, generation, entry.PendingServices);
+                entry.PendingServices.Clear();
+                SetState(entry, changes, PluginState.Active, "激活完成，服务已提交。");
             }
             else
             {
-                _services.RemoveOwner(entry.Id, generation);
+                WithdrawServices(entry);
                 SetState(entry, changes, PluginState.Deactivating, "激活未提交，开始清理。");
             }
         }
         PublishChanges(changes);
         if (accepted) return;
 
+        await DrainStoppingBatchAsync(context).ConfigureAwait(false);
         var cleanupError = await DisposeContextAsync(context).ConfigureAwait(false);
         changes = [];
         lock (_sync)
@@ -321,6 +337,7 @@ public sealed class DougongKernel : IAsyncDisposable
     private async ValueTask StopAsync(PluginEntry entry, PluginContext context)
     {
         var generation = entry.Generation;
+        await DrainStoppingBatchAsync(context).ConfigureAwait(false);
         var error = await DisposeContextAsync(context).ConfigureAwait(false);
         List<PluginStateChange> changes = [];
         lock (_sync)
@@ -347,7 +364,7 @@ public sealed class DougongKernel : IAsyncDisposable
     {
         using (EnterCallback(context))
         {
-            try { await context.DisposeAsync().ConfigureAwait(false); return null; }
+            try { await context.CompleteDisposalAsync().ConfigureAwait(false); return null; }
             catch (Exception ex) { return ex; }
         }
     }
@@ -369,12 +386,36 @@ public sealed class DougongKernel : IAsyncDisposable
             ObjectDisposedException.ThrowIf(entry.Generation != generation || !entry.DesiredActive
                 || entry.Context is null || entry.Context.IsClosed
                 || entry.State is not (PluginState.Activating or PluginState.Active), entry.Context);
-            _services.Add(owner, generation, serviceType, name, instance);
+            if (entry.State != PluginState.Activating)
+                throw new InvalidOperationException("服务注册事务已提交；新增服务需要重新激活插件。");
+            if (!entry.PendingServices.TryAdd(new ServiceKey(serviceType, name), instance))
+                throw new InvalidOperationException($"插件 '{owner}' 在本次激活中重复注册服务 '{serviceType.Name}'。");
         }
     }
 
-    internal IReadOnlyList<ServiceTable.ServiceEntry> FindServices(Type serviceType, string? name) =>
-        _services.Find(serviceType, name);
+    private void WithdrawServices(PluginEntry entry)
+    {
+        entry.Context?.Invocations.Close();
+        entry.PendingServices.Clear();
+        _services.RemoveOwner(entry.Id, entry.Generation);
+    }
+
+    internal IReadOnlyList<ServiceTable.ServiceEntry> FindServices(
+        PluginId owner, long generation, Type serviceType, string? name)
+    {
+        lock (_sync)
+        {
+            var committed = _services.Find(serviceType, name);
+            if (_entries.TryGetValue(owner, out var entry) && entry.Generation == generation
+                && entry.DesiredActive && entry.State == PluginState.Activating
+                && entry.Context is { IsClosed: false }
+                && entry.PendingServices.TryGetValue(new ServiceKey(serviceType, name), out var pending))
+            {
+                return [.. committed, new ServiceTable.ServiceEntry(owner, generation, pending)];
+            }
+            return committed;
+        }
+    }
 
     private PluginEntry RequireEntry(PluginId id) => _entries.TryGetValue(id, out var entry)
         ? entry : throw new KeyNotFoundException($"插件 '{id}' 未登记。");
@@ -448,7 +489,7 @@ public sealed class DougongKernel : IAsyncDisposable
             foreach (var entry in _entries.Values)
             {
                 entry.DesiredActive = false;
-                _services.RemoveOwner(entry.Id, entry.Generation);
+                WithdrawServices(entry);
             }
             contexts = [.. _entries.Values.Select(e => e.Context).OfType<PluginContext>()];
             completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -488,10 +529,10 @@ public sealed class DougongKernel : IAsyncDisposable
         }
         public TService? Resolve<TService>(string? name = null) where TService : class
         {
-            var matches = kernel.FindServices(typeof(TService), name);
+            var matches = kernel.FindServices(owner, generation, typeof(TService), name);
             return matches.Count == 1 ? (TService)matches[0].Instance : null;
         }
         public IReadOnlyList<TService> ResolveAll<TService>(string? name = null) where TService : class =>
-            [.. kernel.FindServices(typeof(TService), name).Select(e => (TService)e.Instance)];
+            [.. kernel.FindServices(owner, generation, typeof(TService), name).Select(e => (TService)e.Instance)];
     }
 }

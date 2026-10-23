@@ -71,7 +71,8 @@ public interface IPlugin
 
 public sealed class PluginContext : IAsyncDisposable
 {
-    IServiceRegistry Services { get; }   // 本作用域注册/解析服务
+    IServiceRegistry Services { get; }   // 本作用域注册/解析服务；Resolve 为未跟踪过渡入口
+    IResolver Resolver { get; }          // 代次绑定调用引用；InvokeAsync 持有租约，停用排空
     IEventBus Events { get; }            // 类型化事件总线，IObservable 表面
     IConfiguration Config { get; }       // 本插件配置节
     ILogger Logger { get; }
@@ -111,6 +112,8 @@ Stopped → Unloading → Unloaded（已脱离宿主，GC 回收另行验证）
 ### 3.3 服务注册表与依赖重启
 
 服务标识 = `(ServiceType, Name?)`；服务需求记录提供方声明之外的**未满足需求**，包括类型、名称、最小/最大数量、是否必需和选择优先级。提供方归属服务条目；消费方只拿到带生命周期租约的解析快照，不能在提供方排空后继续调用。
+
+已实现的调用契约：`Resolver.Resolve<T>` 返回绑定提供方激活代次的 `IServiceReference<T>`，只有 `InvokeAsync` 能接触实例。每次调用在同一临界区内校验提供方与消费方代次并计入在途；停用先封闭整个受影响批次的新调用、取消寿命令牌，再等待实际调用返回后清理。旧引用不会自动指向新代次。`Services.Resolve/ResolveAll` 保留为未跟踪的过渡入口，只用于激活期自身暂存解析，不能提供排空保证。尚未实现排空超时预算、裸解析收敛和完整逆拓扑清理。
 
 插件清单依赖与运行时服务依赖分开处理：前者决定程序集能否加载，后者决定插件能否激活。M0 拒绝依赖环并报告完整路径；同键多提供方按明确的名称/优先级选择，无法唯一选择时进入 `Blocked`，不静默覆盖。
 

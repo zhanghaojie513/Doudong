@@ -1,0 +1,129 @@
+namespace Dougong.Kernel;
+
+public sealed partial class DougongKernel
+{
+    private sealed class ServiceResolver(
+        DougongKernel kernel, PluginId? consumer = null, long generation = 0) : IResolver
+    {
+        public IServiceReference<TService>? Resolve<TService>(string? name = null) where TService : class
+        {
+            lock (kernel._sync)
+            {
+                if (kernel._disposed) return null;
+                if (consumer is { } id && !kernel.CanConsume(id, generation)) return null;
+                var matches = kernel._services.Find(typeof(TService), name);
+                if (matches.Count != 1) return null;
+                var match = matches[0];
+                if (!kernel.CanProvide(match.Owner, match.Generation)) return null;
+                return new ServiceReference<TService>(kernel, match, consumer, generation);
+            }
+        }
+    }
+
+    private bool CanConsume(PluginId id, long generation) =>
+        _entries.TryGetValue(id, out var entry) && entry.Generation == generation
+        && entry.DesiredActive && entry.State is PluginState.Activating or PluginState.Active
+        && entry.Context is { IsClosed: false } context && !context.Invocations.IsClosed;
+
+    private bool CanProvide(PluginId id, long generation) =>
+        _entries.TryGetValue(id, out var entry) && entry.Generation == generation
+        && entry.DesiredActive && entry.State == PluginState.Active
+        && entry.Context is { IsClosed: false } context && !context.Invocations.IsClosed;
+
+    private sealed class ServiceReference<TService>(
+        DougongKernel kernel, ServiceTable.ServiceEntry service, PluginId? consumer, long consumerGeneration)
+        : IServiceReference<TService> where TService : class
+    {
+        public async ValueTask InvokeAsync(
+            Func<TService, CancellationToken, ValueTask> action, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(action);
+            await InvokeAsync(async (instance, token) =>
+            {
+                await action(instance, token).ConfigureAwait(false);
+                return true;
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async ValueTask<TResult> InvokeAsync<TResult>(
+            Func<TService, CancellationToken, ValueTask<TResult>> action, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(action);
+            cancellationToken.ThrowIfCancellationRequested();
+            PluginContext providerContext;
+            PluginContext? consumerContext = null;
+            lock (kernel._sync)
+            {
+                ObjectDisposedException.ThrowIf(kernel._disposed
+                    || !kernel.CanProvide(service.Owner, service.Generation), this);
+                providerContext = kernel.RequireEntry(service.Owner).Context!;
+                if (consumer is { } id)
+                {
+                    ObjectDisposedException.ThrowIf(!kernel.CanConsume(id, consumerGeneration), this);
+                    consumerContext = kernel.RequireEntry(id).Context!;
+                }
+                ObjectDisposedException.ThrowIf(!providerContext.Invocations.TryEnter(), this);
+                if (consumerContext is not null && !ReferenceEquals(providerContext, consumerContext)
+                    && !consumerContext.Invocations.TryEnter())
+                {
+                    providerContext.Invocations.Exit();
+                    throw new ObjectDisposedException(nameof(IServiceReference<TService>));
+                }
+            }
+
+            try
+            {
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken, providerContext.Lifetime, consumerContext?.Lifetime ?? default);
+                using var providerCallback = kernel.EnterCallback(providerContext);
+                using var consumerCallback = kernel.EnterCallback(consumerContext);
+                linked.Token.ThrowIfCancellationRequested();
+                return await action((TService)service.Instance, linked.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (consumerContext is not null && !ReferenceEquals(providerContext, consumerContext))
+                    consumerContext.Invocations.Exit();
+                providerContext.Invocations.Exit();
+            }
+        }
+    }
+
+    private async ValueTask DisposePluginContextAsync(PluginContext context)
+    {
+        EnsureLifecycleCallAllowed();
+        await DeactivateGenerationAsync(context.PluginId, context, CancellationToken.None).ConfigureAwait(false);
+        await context.CompleteDisposalAsync().ConfigureAwait(false);
+    }
+
+    private async Task DrainStoppingBatchAsync(PluginContext context)
+    {
+        List<PluginStateChange> changes = [];
+        HashSet<PluginContext> batch = [context];
+        lock (_sync)
+        {
+            bool invalidated;
+            do
+            {
+                invalidated = false;
+                foreach (var entry in _entries.Values)
+                {
+                    if (entry.Context is not { } current) continue;
+                    if (entry.DesiredActive && !current.IsClosed && !current.Invocations.IsClosed
+                        && entry.State != PluginState.Deactivating && MissingRequirements(entry).Count == 0) continue;
+                    if (!current.Invocations.IsClosed)
+                    {
+                        WithdrawServices(entry);
+                        invalidated = true;
+                    }
+                    if (entry.State != PluginState.Deactivating)
+                        SetState(entry, changes, PluginState.Deactivating, "取消并排空服务调用。");
+                    batch.Add(current);
+                }
+            } while (invalidated);
+        }
+        PublishChanges(changes);
+        await Task.WhenAll(batch.Select(RequestStopQuietlyAsync)).ConfigureAwait(false);
+        await Task.WhenAll(batch.Select(c => c.Invocations.WhenDrained)).ConfigureAwait(false);
+    }
+}

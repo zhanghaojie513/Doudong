@@ -27,15 +27,22 @@ public sealed class PluginContext : IAsyncDisposable
 
     internal bool IsCancellationRunning => Volatile.Read(ref _cancellationRunning) != 0;
 
+    private readonly Func<PluginContext, ValueTask> _requestDispose;
+    internal ServiceInvocationScope Invocations { get; } = new();
+
     internal PluginContext(
         PluginId pluginId,
         IServiceRegistry services,
+        IResolver resolver,
         IEventBus events,
         IDisposable? scopedLifetime,
-        Action<PluginId, PluginContext> releaseServices)
+        Action<PluginId, PluginContext> releaseServices,
+        Func<PluginContext, ValueTask> requestDispose)
     {
         PluginId = pluginId;
         Services = services;
+        Resolver = resolver;
+        _requestDispose = requestDispose;
         Events = events;
         _scopedLifetime = scopedLifetime;
         _releaseServices = releaseServices;
@@ -45,6 +52,8 @@ public sealed class PluginContext : IAsyncDisposable
     public PluginId PluginId { get; }
 
     public IServiceRegistry Services { get; }
+
+    public IResolver Resolver { get; }
 
     public IEventBus Events { get; }
 
@@ -77,6 +86,7 @@ public sealed class PluginContext : IAsyncDisposable
             }
 
             _closed = true;
+            Invocations.Close();
             completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
             _stopTask = completion.Task;
         }
@@ -103,8 +113,10 @@ public sealed class PluginContext : IAsyncDisposable
         }
     }
 
-    /// <summary>停用：先取消寿命令牌，再逆序执行清理并聚合错误。并发调用等待同一次清理。</summary>
-    public ValueTask DisposeAsync()
+    /// <summary>请求内核停用本代次，取消并排空调用后逆序清理。</summary>
+    public ValueTask DisposeAsync() => _requestDispose(this);
+
+    internal ValueTask CompleteDisposalAsync()
     {
         TaskCompletionSource completion;
         Func<CancellationToken, ValueTask>[] cleanup;
@@ -140,6 +152,7 @@ public sealed class PluginContext : IAsyncDisposable
             errors.Add(ex);
         }
 
+        await Invocations.WhenDrained.ConfigureAwait(false);
         for (var i = cleanup.Length - 1; i >= 0; i--)
         {
             try

@@ -2,14 +2,22 @@ namespace Dougong.Kernel;
 
 /// <summary>
 /// 本插件作用域内的服务注册表视图。注册归属调用它的插件，清理时随作用域一并移除。
+/// <see cref="Resolve{TService}"/> 与 <see cref="ResolveAll{TService}"/> 返回未跟踪的裸引用，
+/// 不提供停用排空保证；跨插件调用应使用 <see cref="PluginContext.Resolver"/>。
 /// </summary>
 public interface IServiceRegistry
 {
-    /// <summary>注册服务；同一插件重复注册同一键视为编程错误。</summary>
+    /// <summary>
+    /// 仅在激活回调期间注册服务；同一插件同代次重复注册同一键视为编程错误。
+    /// 注册在激活成功后整批发布，失败或关闭时丢弃；Active 后新增注册会抛出异常。
+    /// </summary>
     void Register<TService>(TService service, string? name = null)
         where TService : class;
 
-    /// <summary>解析当前快照中唯一的提供方；缺失或存在多个同键提供方时返回 null。</summary>
+    /// <summary>
+    /// 解析唯一提供方；缺失或同键歧义时返回 null。
+    /// 激活期间包含本代次暂存服务，其余提供方只读取已提交服务。
+    /// </summary>
     TService? Resolve<TService>(string? name = null)
         where TService : class;
 
