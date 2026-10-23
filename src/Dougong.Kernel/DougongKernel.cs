@@ -217,7 +217,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var revision = _revision;
-            var snapshot = new List<PluginHandle>(_entries.Values.Select(ToHandle));
+            var snapshot = new List<PluginSummary>(_entries.Values.Select(ToSummary));
             return CreateView(revision, snapshot, capacity, [], requiresResync: false);
         }
     }
@@ -247,7 +247,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
 
     private KernelStateView CreateView(
         long revision,
-        IReadOnlyList<PluginHandle>? snapshot,
+        IReadOnlyList<PluginSummary>? snapshot,
         int capacity,
         IReadOnlyList<StateDelta> replay,
         bool requiresResync)
@@ -266,12 +266,28 @@ public sealed partial class DougongKernel : IAsyncDisposable
             revision, snapshot, subscription.ReadAllAsync(replay), subscription, requiresResync);
     }
 
-    public ValueTask<IReadOnlyList<PluginHandle>> GetPluginsAsync(CancellationToken cancellationToken = default)
+    public ValueTask<IReadOnlyList<PluginSummary>> GetPluginsAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_sync)
         {
-            return ValueTask.FromResult<IReadOnlyList<PluginHandle>>([.. _entries.Values.Select(ToHandle)]);
+            return ValueTask.FromResult<IReadOnlyList<PluginSummary>>([.. _entries.Values.Select(ToSummary)]);
+        }
+    }
+
+    /// <summary>
+    /// 显式取得完整插件清单。清单包含服务需求里的 <see cref="Type"/>，
+    /// 对动态插件而言可能是插件 ALC 的类型；宿主不应长期保留返回值。
+    /// 插件未登记时返回 null。
+    /// </summary>
+    public ValueTask<PluginManifest?> GetPluginManifestAsync(
+        PluginId id, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_sync)
+        {
+            return ValueTask.FromResult(
+                _entries.TryGetValue(id, out var entry) ? entry.Manifest : null);
         }
     }
 
@@ -801,7 +817,11 @@ public sealed partial class DougongKernel : IAsyncDisposable
         lock (_sync) { return ToHandle(RequireEntry(id)); }
     }
 
-    private static PluginHandle ToHandle(PluginEntry entry) => new(entry.Id, entry.Manifest, entry.State);
+    private static PluginHandle ToHandle(PluginEntry entry) =>
+        new(entry.Id, entry.Manifest.Version, entry.State);
+
+    private static PluginSummary ToSummary(PluginEntry entry) =>
+        new(entry.Id, entry.Manifest.Version, entry.State);
 
     /// <summary>调用方须持有 <c>_sync</c>。超出保留上限时丢弃最旧的增量。</summary>
     private void AppendHistory(StateDelta delta)

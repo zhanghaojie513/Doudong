@@ -102,6 +102,8 @@ public sealed class DougongKernel : IAsyncDisposable
     public ValueTask DeactivateAsync(PluginId id, CancellationToken ct);
     public ValueTask<PluginHandle> ActivateAsync(PluginId id, CancellationToken ct);
     public ValueTask<UnloadResult> UnloadAsync(PluginId id, CancellationToken ct);
+    public ValueTask<IReadOnlyList<PluginSummary>> GetPluginsAsync(CancellationToken ct);
+    public ValueTask<PluginManifest?> GetPluginManifestAsync(PluginId id, CancellationToken ct);
     public IResolver Resolver { get; }              // 提供作用域租约，不泄漏永久裸引用
     public IObservable<PluginStateChange> States { get; } // 已订阅连接上的增量通知
     public StateSubscription SubscribeStates(); // 原子取得快照、修订号和后续增量订阅
@@ -187,7 +189,7 @@ Stopped → Unloading → Unloaded（已脱离宿主，GC 回收另行验证）
 - 第三方跨插件服务使用独立、稳定的共享契约程序集；宿主预先验证兼容范围。实现依赖留在插件私有上下文；不支持的契约版本明确拒载，不能用同名类型字符串绕过类型同一性检查。
 - **停止与卸载分离**：`DeactivateAsync` 停止当前激活代次并释放其作用域，保留已加载代码；再激活创建新作用域。`UnloadAsync` 先停止和排空，再释放入口实例、工厂、服务 Type 键、事件频道、队列、任务及诊断中的外部引用，调用 `ALC.Unload()`。清理失败/超时不进入成功卸载状态。卸载后只保留字符串/共享 DTO 描述，重新启用必须重新加载新实例。
 - **卸载契约**：清理回调逆序、幂等执行；单个回调失败仍继续清理并聚合错误；清理超时则停止同批次后续清理、保留依赖资源并进入隔离。context 关闭后拒绝迟到注册。超时而不响应取消的代码不能强制中止，禁止重用该实例或重叠激活新代次，标记需重启宿主。独立线程、timer、委托和事件必须归作用域管理。
-- ALC 内部静态引用环本身不阻止回收，关键是外部 GC 根。不得将插件对象、Type、反射缓存、原始异常或委托长期存入宿主；错误转为共享诊断 DTO，工具结果采用共享结构化数据。
+- ALC 内部静态引用环本身不阻止回收，关键是外部 GC 根。不得将插件对象、Type、反射缓存、原始异常或委托长期存入宿主；错误转为共享诊断 DTO，工具结果采用共享结构化数据。快照与句柄只含 `Id`、`Version`、`State` 等共享数据；完整 `PluginManifest` 含服务需求的 `Type`，只能经 `GetPluginManifestAsync` 显式取得，调用方须自行保证不在卸载后长期保留。
 - 卸载验证在独立且禁止内联的辅助方法退出后检查 WeakReference，覆盖实际服务调用、事件、失败清理及多轮装卸。GC 循环仅用于测试，不放进正常生命周期；一次测试通过不代表任意插件可卸载。
 - ALC 只隔离依赖解析，不隔离系统权限或进程故障。第一版仅加载可信进程内插件；`out-of-process` 是后续故障隔离候选，同一 OS 权限下仍不等于安全沙箱。
 

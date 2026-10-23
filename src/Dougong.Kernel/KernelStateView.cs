@@ -8,7 +8,7 @@ public sealed class KernelStateView : IDisposable
 {
     internal KernelStateView(
         long revision,
-        IReadOnlyList<PluginHandle>? snapshot,
+        IReadOnlyList<PluginSummary>? snapshot,
         IAsyncEnumerable<StateDelta> changes,
         IDisposable subscription,
         bool requiresResync = false)
@@ -23,8 +23,11 @@ public sealed class KernelStateView : IDisposable
     /// <summary>快照（或续订游标）对应的内核修订号。</summary>
     public long Revision { get; }
 
-    /// <summary>当前状态快照；从游标续订时为 null，调用方应保留自己的状态。</summary>
-    public IReadOnlyList<PluginHandle>? Snapshot { get; }
+    /// <summary>
+    /// 当前状态快照；从游标续订时为 null，调用方应保留自己的状态。
+    /// 只含共享数据，不持有插件清单或插件 ALC 类型。
+    /// </summary>
+    public IReadOnlyList<PluginSummary>? Snapshot { get; }
 
     /// <summary>
     /// 修订号严格递增的后续状态增量。同一插件的增量按分区顺序递增；
