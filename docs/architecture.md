@@ -117,6 +117,8 @@ Stopped → Unloading → Unloaded（已脱离宿主，GC 回收另行验证）
 
 插件清单依赖与运行时服务依赖分开处理：前者决定程序集能否加载，后者决定插件能否激活。M0 拒绝依赖环并报告完整路径；同键多提供方按明确的名称/优先级选择，无法唯一选择时进入 `Blocked`，不静默覆盖。
 
+已实现：`ServiceRequirement.Optional` 标记可选服务需求（缺失不阻塞激活）；`PluginManifest.DependsOn` 表达插件级依赖，被依赖插件须为 `Active`；`RegisterAsync` 在加入前检测依赖环并报告完整路径。同键多提供方的名称/优先级选择仍待实现，当前仍以歧义进入 `Blocked`。
+
 ```text
 提供方停用/失败 →
   1. 生命周期协调器串行化本次变更，冻结相关需求图

@@ -133,6 +133,9 @@ public sealed partial class DougongKernel : IAsyncDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_entries.ContainsKey(manifest.Id))
                 throw new InvalidOperationException($"插件 '{manifest.Id}' 已登记。");
+            if (FindDependencyCycle(manifest.Id, manifest) is { } cycle)
+                throw new InvalidOperationException(
+                    $"插件依赖成环：{string.Join(" -> ", cycle)}。");
             _entries.Add(manifest.Id, new PluginEntry
             {
                 Id = manifest.Id, Manifest = manifest, Factory = factory, DesiredActive = true,
@@ -404,8 +407,53 @@ public sealed partial class DougongKernel : IAsyncDisposable
     {
         List<string> missing = [];
         foreach (var requirement in entry.Manifest.RequiredServices)
+        {
+            if (requirement.Optional) continue;
             if (!_services.IsSatisfied(requirement, out var reason)) missing.Add(reason!);
+        }
+
+        foreach (var dependency in entry.Manifest.DependsOn)
+        {
+            if (!_entries.TryGetValue(dependency, out var provider))
+                missing.Add($"未登记插件依赖 {dependency}。");
+            else if (provider.State != PluginState.Active)
+                missing.Add($"插件依赖 {dependency} 尚未激活（当前 {provider.State}）。");
+        }
+
         return missing;
+    }
+
+    /// <summary>检测加入 <paramref name="pending"/> 后是否形成插件依赖环，返回完整路径。</summary>
+    private List<PluginId>? FindDependencyCycle(PluginId start, PluginManifest pending)
+    {
+        HashSet<PluginId> customSet = [pending.Id];
+        HashSet<PluginId> onPath = [];
+        List<PluginId> path = [];
+        return Walk(start) ? [.. path] : null;
+
+        IEnumerable<PluginId> DependenciesOf(PluginId id) =>
+            customSet.Contains(id) ? pending.DependsOn
+            : _entries.TryGetValue(id, out var entry) ? entry.Manifest.DependsOn
+            : [];
+
+        bool Walk(PluginId current)
+        {
+            if (!onPath.Add(current))
+            {
+                path.Add(current);
+                return true;
+            }
+
+            path.Add(current);
+            foreach (var dependency in DependenciesOf(current))
+            {
+                if (Walk(dependency)) return true;
+            }
+
+            onPath.Remove(current);
+            path.RemoveAt(path.Count - 1);
+            return false;
+        }
     }
 
     internal void AddService(PluginId owner, long generation, Type serviceType, string? name, object instance)
