@@ -11,8 +11,10 @@ public interface IServiceRegistry
     /// <summary>
     /// 仅在激活回调期间注册服务；同一插件同代次重复注册同一键视为编程错误。
     /// 注册在激活成功后整批发布，失败或关闭时丢弃；Active 后新增注册会抛出异常。
+    /// <paramref name="priority"/> 用于同键多提供方时选出唯一最优者，数值越大越优先；
+    /// 最高优先级并列仍视为歧义。
     /// </summary>
-    void Register<TService>(TService service, string? name = null)
+    void Register<TService>(TService service, string? name = null, int priority = 0)
         where TService : class;
 
     /// <summary>

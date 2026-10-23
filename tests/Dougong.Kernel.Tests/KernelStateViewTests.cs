@@ -21,7 +21,7 @@ public sealed class KernelStateViewTests
         await kernel.RegisterAsync(() => new SimplePlugin("test.a"));
 
         using var view = kernel.SubscribeStates();
-        Assert.Equal(PluginState.Active, Assert.Single(view.Snapshot).State);
+        Assert.Equal(PluginState.Active, Assert.Single(view.Snapshot!).State);
 
         var deltas = new List<StateDelta>();
         var reader = Task.Run(async () =>
@@ -50,7 +50,7 @@ public sealed class KernelStateViewTests
         await kernel.RegisterAsync(() => new SimplePlugin("test.a"));
 
         using var view = kernel.SubscribeStates();
-        Assert.Single(view.Snapshot);
+        Assert.Single(view.Snapshot!);
 
         var first = new TaskCompletionSource<StateDelta>(TaskCreationOptions.RunContinuationsAsynchronously);
         _ = Task.Run(async () =>
@@ -105,6 +105,133 @@ public sealed class KernelStateViewTests
         await completed.Task.WaitAsync(Timeout);
         Assert.NotNull(kernel.LastObserverError);
         Assert.Contains("队列已满", kernel.LastObserverError!.Message);
+    }
+
+    [Fact]
+    public async Task Deltas_carry_their_partition_and_order_within_a_partition()
+    {
+        await using var kernel = new DougongKernel();
+        using var view = kernel.SubscribeStates();
+        var deltas = new List<StateDelta>();
+        var reader = Task.Run(async () =>
+        {
+            await foreach (var delta in view.Changes)
+            {
+                deltas.Add(delta);
+                if (deltas.Count >= 2) break;
+            }
+        });
+
+        await kernel.RegisterAsync(() => new SimplePlugin("test.a"));
+        await reader.WaitAsync(Timeout);
+
+        Assert.All(deltas, d => Assert.Equal(d.Change!.PluginId, d.Partition));
+
+        // 同一分区内修订号严格递增。
+        foreach (var group in deltas.GroupBy(d => d.Partition))
+        {
+            var revisions = group.Select(d => d.Revision).ToList();
+            Assert.Equal(revisions.OrderBy(r => r), revisions);
+            Assert.Equal(revisions.Distinct().Count(), revisions.Count);
+        }
+    }
+
+    [Fact]
+    public async Task Resuming_from_a_cursor_replays_missed_deltas_without_a_snapshot()
+    {
+        await using var kernel = new DougongKernel();
+        using var first = kernel.SubscribeStates();
+        var start = first.Revision;
+
+        await kernel.RegisterAsync(() => new SimplePlugin("test.a"));
+        await kernel.RegisterAsync(() => new SimplePlugin("test.b"));
+
+        using var resumed = kernel.ResumeStates(start);
+        Assert.False(resumed.RequiresResync);
+        Assert.Null(resumed.Snapshot);
+
+        var replay = new List<StateDelta>();
+        await foreach (var delta in resumed.Changes)
+        {
+            replay.Add(delta);
+            if (replay.Count >= 4) break;
+        }
+
+        Assert.Equal(4, replay.Count);
+        Assert.Equal(start + 1, replay[0].Revision);
+        Assert.Equal(start + 4, replay[^1].Revision);
+        Assert.Contains(replay, d => d.Change!.PluginId.Value == "test.a");
+        Assert.Contains(replay, d => d.Change!.PluginId.Value == "test.b");
+    }
+
+    [Fact]
+    public async Task Cursor_older_than_retention_requires_resync()
+    {
+        await using var kernel = new DougongKernel();
+        kernel.RevisionHistoryLimit = 2;
+        using var first = kernel.SubscribeStates();
+        var start = first.Revision;
+
+        for (var i = 0; i < 3; i++)
+            await kernel.RegisterAsync(() => new SimplePlugin($"test.p{i}"));
+
+        using var stale = kernel.ResumeStates(start);
+        Assert.True(stale.RequiresResync);
+        Assert.Null(stale.Snapshot);
+        Assert.Empty(await CollectAsync(stale.Changes, 1));
+    }
+
+    [Fact]
+    public async Task Cursor_at_current_revision_yields_only_new_deltas()
+    {
+        await using var kernel = new DougongKernel();
+        await kernel.RegisterAsync(() => new SimplePlugin("test.a"));
+        using var current = kernel.SubscribeStates();
+        var cursor = current.Revision;
+
+        using var resumed = kernel.ResumeStates(cursor);
+        Assert.False(resumed.RequiresResync);
+
+        var deltas = new List<StateDelta>();
+        var reader = Task.Run(async () =>
+        {
+            await foreach (var delta in resumed.Changes)
+            {
+                deltas.Add(delta);
+                break;
+            }
+        });
+        await kernel.RegisterAsync(() => new SimplePlugin("test.b"));
+        await reader.WaitAsync(Timeout);
+
+        Assert.Equal(cursor + 1, deltas[0].Revision);
+    }
+
+    [Fact]
+    public async Task Future_cursor_is_rejected()
+    {
+        await using var kernel = new DougongKernel();
+        Assert.Throws<ArgumentOutOfRangeException>(() => kernel.ResumeStates(9999));
+    }
+
+    private static async Task<List<StateDelta>> CollectAsync(IAsyncEnumerable<StateDelta> source, int max)
+    {
+        var list = new List<StateDelta>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        try
+        {
+            await foreach (var delta in source.WithCancellation(cts.Token))
+            {
+                list.Add(delta);
+                if (list.Count >= max) break;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 预期：没有更多增量时序列保持等待。
+        }
+
+        return list;
     }
 
     [Fact]

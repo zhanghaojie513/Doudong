@@ -4,18 +4,20 @@ using System.Threading.Channels;
 
 internal sealed record ServiceKey(Type ServiceType, string? Name);
 
+internal sealed record PendingService(object Instance, int Priority);
+
 internal sealed class ServiceTable
 {
     private readonly object _sync = new();
     private readonly Dictionary<ServiceKey, List<ServiceEntry>> _entries = [];
 
-    internal sealed record ServiceEntry(PluginId Owner, long Generation, object Instance);
+    internal sealed record ServiceEntry(PluginId Owner, long Generation, object Instance, int Priority);
 
-    public void Publish(PluginId owner, long generation, IReadOnlyDictionary<ServiceKey, object> services)
+    public void Publish(PluginId owner, long generation, IReadOnlyDictionary<ServiceKey, PendingService> services)
     {
         lock (_sync)
         {
-            foreach (var (key, instance) in services)
+            foreach (var (key, pending) in services)
             {
                 if (!_entries.TryGetValue(key, out var list))
                 {
@@ -23,7 +25,7 @@ internal sealed class ServiceTable
                     _entries[key] = list;
                 }
 
-                list.Add(new ServiceEntry(owner, generation, instance));
+                list.Add(new ServiceEntry(owner, generation, pending.Instance, pending.Priority));
             }
         }
     }
@@ -51,7 +53,7 @@ internal sealed class ServiceTable
 
     /// <summary>
     /// 判断需求是否满足。指定 <see cref="ServiceRequirement.ProviderId"/> 时只匹配该提供方；
-    /// 否则要求恰好一个提供方，多个视为歧义。
+    /// 否则按优先级选最高者，最高优先级仍并列多个则视为歧义。
     /// </summary>
     public bool IsSatisfied(ServiceRequirement requirement, out string? reason)
     {
@@ -61,16 +63,49 @@ internal sealed class ServiceTable
             matches = [.. matches.Where(e => e.Owner == required)];
         }
 
-        reason = matches.Count switch
+        if (matches.Count == 0)
         {
-            1 => null,
-            0 when requirement.ProviderId is { } id =>
-                $"未找到由插件 {id} 提供的服务 {requirement.ServiceType.Name}({requirement.Name})。",
-            0 => $"未找到服务 {requirement.ServiceType.Name}({requirement.Name})。",
-            _ => $"服务 {requirement.ServiceType.Name} 存在 {matches.Count} 个提供方，需求不唯一；"
-                + "请指定 ProviderId 或为提供方命名。",
-        };
-        return matches.Count == 1;
+            reason = requirement.ProviderId is { } id
+                ? $"未找到由插件 {id} 提供的服务 {requirement.ServiceType.Name}({requirement.Name})。"
+                : $"未找到服务 {requirement.ServiceType.Name}({requirement.Name})。";
+            return false;
+        }
+
+        if (SelectByPriority(matches) is not null)
+        {
+            reason = null;
+            return true;
+        }
+
+        var top = TopPriority(matches);
+        reason = $"服务 {requirement.ServiceType.Name} 有 {matches.Count} 个提供方"
+            + $"（最高优先级 {top} 并列），无法唯一选择；请指定 ProviderId 或调整优先级。";
+        return false;
+    }
+
+    /// <summary>按优先级选出唯一提供方；最高优先级并列时返回 null。</summary>
+    public static ServiceEntry? SelectByPriority(IReadOnlyList<ServiceEntry> matches)
+    {
+        if (matches.Count == 0) return null;
+        if (matches.Count == 1) return matches[0];
+        var top = TopPriority(matches);
+        ServiceEntry? winner = null;
+        foreach (var match in matches)
+        {
+            if (match.Priority != top) continue;
+            if (winner is not null) return null;
+            winner = match;
+        }
+
+        return winner;
+    }
+
+    private static int TopPriority(IReadOnlyList<ServiceEntry> matches)
+    {
+        var top = matches[0].Priority;
+        for (var i = 1; i < matches.Count; i++)
+            if (matches[i].Priority > top) top = matches[i].Priority;
+        return top;
     }
 }
 
@@ -87,7 +122,7 @@ internal sealed class PluginEntry
     public long Generation { get; set; }
     public PluginContext? Context { get; set; }
     public DougongKernel.LoadedPlugin? Loaded { get; set; }
-    public Dictionary<ServiceKey, object> PendingServices { get; } = [];
+    public Dictionary<ServiceKey, PendingService> PendingServices { get; } = [];
 }
 
 /// <summary>
@@ -102,7 +137,11 @@ public sealed partial class DougongKernel : IAsyncDisposable
     private readonly ServiceTable _services = new();
     private readonly List<Action<PluginStateChange>> _stateObservers = [];
     private readonly List<RevisionSubscription> _revisionSubscriptions = [];
+    private readonly List<StateDelta> _revisionHistory = [];
     private long _revision;
+
+    /// <summary>保留的增量条数，供游标续订回放；超出后旧游标必须重取快照。</summary>
+    public int RevisionHistoryLimit { get; set; } = 1024;
     private readonly EventBus _events;
     private readonly AsyncLocal<CallbackScope?> _callback = new();
     private bool _disposed;
@@ -149,16 +188,52 @@ public sealed partial class DougongKernel : IAsyncDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             var revision = _revision;
             var snapshot = new List<PluginHandle>(_entries.Values.Select(ToHandle));
-            var channel = Channel.CreateBounded<StateDelta>(new BoundedChannelOptions(capacity)
-            {
-                SingleReader = true,
-                SingleWriter = false,
-                FullMode = BoundedChannelFullMode.Wait,
-            });
-            var subscription = new RevisionSubscription(this, channel, capacity);
-            _revisionSubscriptions.Add(subscription);
-            return new KernelStateView(revision, snapshot, subscription.ReadAllAsync(), subscription);
+            return CreateView(revision, snapshot, capacity, [], requiresResync: false);
         }
+    }
+
+    /// <summary>
+    /// 从已知修订号续订：回放该修订号之后的保留增量，随后继续接收新增量。
+    /// 游标早于保留窗口时返回 <see cref="KernelStateView.RequiresResync"/>，调用方须重新取快照。
+    /// </summary>
+    public KernelStateView ResumeStates(long sinceRevision, int capacity = 256)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (sinceRevision > _revision)
+                throw new ArgumentOutOfRangeException(nameof(sinceRevision),
+                    $"修订号 {sinceRevision} 超前于当前内核修订号 {_revision}。");
+
+            var oldest = _revisionHistory.Count > 0 ? _revisionHistory[0].Revision : _revision + 1;
+            if (sinceRevision + 1 < oldest)
+                return CreateView(_revision, null, capacity, [], requiresResync: true);
+
+            var replay = _revisionHistory.Where(d => d.Revision > sinceRevision).ToArray();
+            return CreateView(sinceRevision, null, capacity, replay, requiresResync: false);
+        }
+    }
+
+    private KernelStateView CreateView(
+        long revision,
+        IReadOnlyList<PluginHandle>? snapshot,
+        int capacity,
+        IReadOnlyList<StateDelta> replay,
+        bool requiresResync)
+    {
+        var channel = Channel.CreateBounded<StateDelta>(new BoundedChannelOptions(capacity)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.Wait,
+        });
+        var subscription = new RevisionSubscription(this, channel, capacity);
+        if (!requiresResync) _revisionSubscriptions.Add(subscription);
+        else subscription.Dispose();
+
+        return new KernelStateView(
+            revision, snapshot, subscription.ReadAllAsync(replay), subscription, requiresResync);
     }
 
     public ValueTask<IReadOnlyList<PluginHandle>> GetPluginsAsync(CancellationToken cancellationToken = default)
@@ -504,7 +579,8 @@ public sealed partial class DougongKernel : IAsyncDisposable
         }
     }
 
-    internal void AddService(PluginId owner, long generation, Type serviceType, string? name, object instance)
+    internal void AddService(
+        PluginId owner, long generation, Type serviceType, string? name, object instance, int priority = 0)
     {
         lock (_sync)
         {
@@ -515,7 +591,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
                 || entry.State is not (PluginState.Activating or PluginState.Active), entry.Context);
             if (entry.State != PluginState.Activating)
                 throw new InvalidOperationException("服务注册事务已提交；新增服务需要重新激活插件。");
-            if (!entry.PendingServices.TryAdd(new ServiceKey(serviceType, name), instance))
+            if (!entry.PendingServices.TryAdd(new ServiceKey(serviceType, name), new PendingService(instance, priority)))
                 throw new InvalidOperationException($"插件 '{owner}' 在本次激活中重复注册服务 '{serviceType.Name}'。");
         }
     }
@@ -538,22 +614,33 @@ public sealed partial class DougongKernel : IAsyncDisposable
                 && entry.Context is { IsClosed: false }
                 && entry.PendingServices.TryGetValue(new ServiceKey(serviceType, name), out var pending))
             {
-                committed = [.. committed, new ServiceTable.ServiceEntry(owner, generation, pending)];
+                committed = [.. committed, new ServiceTable.ServiceEntry(
+                    owner, generation, pending.Instance, pending.Priority)];
             }
 
             // 消费方声明了 ProviderId 时，按该提供方过滤，避免同键多提供方被判为歧义。
             if (_entries.TryGetValue(owner, out var consumer)
                 && PreferredProvider(consumer, serviceType, name) is { } preferred)
             {
-                return [.. committed.Where(e => e.Owner == preferred)];
+                committed = [.. committed.Where(e => e.Owner == preferred)];
+            }
+
+            // 未指定 ProviderId 时按优先级缩小到唯一最优提供方；并列则保持多值，由调用方判为歧义。
+            if (committed.Count > 1 && ServiceTable.SelectByPriority(committed) is { } best)
+            {
+                committed = [best];
             }
 
             return committed;
         }
     }
 
-    private static PluginId? PreferredProvider(PluginEntry consumer, Type serviceType, string? name)
-    {
+    internal PluginId? PreferredProviderFor(PluginId consumerId, Type serviceType, string? name) =>
+        _entries.TryGetValue(consumerId, out var consumer)
+            ? PreferredProvider(consumer, serviceType, name)
+            : null;
+
+    private static PluginId? PreferredProvider(PluginEntry consumer, Type serviceType, string? name)    {
         foreach (var requirement in consumer.Manifest.RequiredServices)
         {
             if (requirement.ProviderId is { } provider
@@ -577,6 +664,14 @@ public sealed partial class DougongKernel : IAsyncDisposable
 
     private static PluginHandle ToHandle(PluginEntry entry) => new(entry.Id, entry.Manifest, entry.State);
 
+    /// <summary>调用方须持有 <c>_sync</c>。超出保留上限时丢弃最旧的增量。</summary>
+    private void AppendHistory(StateDelta delta)
+    {
+        _revisionHistory.Add(delta);
+        var overflow = _revisionHistory.Count - RevisionHistoryLimit;
+        if (overflow > 0) _revisionHistory.RemoveRange(0, overflow);
+    }
+
     private static void SetState(PluginEntry entry, List<PluginStateChange> changes,
         PluginState to, string? reason, Exception? error = null)
     {
@@ -595,15 +690,12 @@ public sealed partial class DougongKernel : IAsyncDisposable
         lock (_sync)
         {
             revisions = [.. _revisionSubscriptions];
-            if (revisions.Length > 0)
+            deltas = new List<StateDelta>(changes.Count);
+            foreach (var change in changes)
             {
-                deltas = new List<StateDelta>(changes.Count);
-                foreach (var change in changes)
-                    deltas.Add(new StateDelta(++_revision, change));
-            }
-            else
-            {
-                _revision += changes.Count;
+                var delta = new StateDelta(++_revision, change, Partition: change.PluginId);
+                deltas.Add(delta);
+                AppendHistory(delta);
             }
         }
 
@@ -615,7 +707,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
                     catch (Exception ex) { LastObserverError = ex; }
         }
 
-        if (deltas is null) return;
+        if (deltas is null || deltas.Count == 0) return;
         foreach (var subscription in revisions)
             foreach (var delta in deltas)
                 subscription.TryPublish(delta);
@@ -706,10 +798,10 @@ public sealed partial class DougongKernel : IAsyncDisposable
 
     private sealed class ScopedRegistry(DougongKernel kernel, PluginId owner, long generation) : IServiceRegistry
     {
-        public void Register<TService>(TService service, string? name = null) where TService : class
+        public void Register<TService>(TService service, string? name = null, int priority = 0) where TService : class
         {
             ArgumentNullException.ThrowIfNull(service);
-            kernel.AddService(owner, generation, typeof(TService), name, service);
+            kernel.AddService(owner, generation, typeof(TService), name, service, priority);
         }
         public TService? Resolve<TService>(string? name = null) where TService : class
         {

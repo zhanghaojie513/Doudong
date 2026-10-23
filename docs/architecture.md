@@ -117,7 +117,7 @@ Stopped → Unloading → Unloaded（已脱离宿主，GC 回收另行验证）
 
 插件清单依赖与运行时服务依赖分开处理：前者决定程序集能否加载，后者决定插件能否激活。M0 拒绝依赖环并报告完整路径；同键多提供方按明确的名称/优先级选择，无法唯一选择时进入 `Blocked`，不静默覆盖。
 
-已实现：`ServiceRequirement.Optional` 标记可选服务需求（缺失不阻塞激活）；`PluginManifest.DependsOn` 表达插件级依赖，被依赖插件须为 `Active`；`RegisterAsync` 在加入前检测依赖环并报告完整路径；`ServiceRequirement.ProviderId` 显式指定同键多提供方中的唯一可接受提供方，需求判断与 `Resolver`/`Services` 解析都按它过滤。未指定 `ProviderId` 时同键多提供方仍按歧义进入 `Blocked`，不静默任选；按优先级自动选择的策略尚未实现。
+已实现：`ServiceRequirement.Optional` 标记可选服务需求（缺失不阻塞激活）；`PluginManifest.DependsOn` 表达插件级依赖，被依赖插件须为 `Active`；`RegisterAsync` 在加入前检测依赖环并报告完整路径；`ServiceRequirement.ProviderId` 显式指定唯一可接受提供方；未指定时按 `Register(priority:)` 选出唯一最高优先级提供方，最高优先级并列仍判为歧义进入 `Blocked`。需求判断与 `Resolver`/`Services` 解析使用同一选择逻辑。
 
 ```text
 提供方停用/失败 →
@@ -143,7 +143,7 @@ Stopped → Unloading → Unloaded（已脱离宿主，GC 回收另行验证）
 - 订阅归 `PluginContext` 管理，关闭时停止入队、退订并等待在途回调；超时按清理失败处理，不能声称已排空。释放空频道和队列中的 Type/委托/插件对象引用，避免阻止 ALC 回收。
 - `SubscribeStates()` 原子返回 `StateSubscription`：不可变状态快照、修订号 R、已从 R 之后衔接的有界增量流及可释放订阅句柄。返回前先建立增量边界，客户端先应用快照再消费增量；不能通过独立读快照再订阅 `States` 实现。普通 `States` 仅提供增量，不保证首次订阅前历史。版本缺口要求重同步；已关闭代次的迟到事件不得进入新代次或下一轮会话。
 
-已实现：`DougongKernel.SubscribeStates(capacity)` 在同一临界区内取得快照、修订号并建立增量订阅；增量修订号严格递增且不回放快照已含状态。队列满时序列以一条 `ResyncRequired` 项结束后终止，调用方须重新取快照。`SubscribeStateChanges` 保留为同步观察者入口。
+已实现：`DougongKernel.SubscribeStates(capacity)` 在同一临界区内取得快照、修订号并建立增量订阅；增量带修订号与 `Partition`（所属插件），同一分区内修订号严格递增，跨分区只能依赖修订号而非业务顺序。队列满时序列以一条 `ResyncRequired` 项结束后终止。`ResumeStates(sinceRevision)` 在保留窗口内回放错过的增量，窗口外返回 `RequiresResync` 要求重取快照。`SubscribeStateChanges` 保留为同步观察者入口。
 - M0 用慢订阅、回调抛错、重入内核、订阅期间启停和队列溢出验证上述规则；桌面同步另按 §6.7 验收。
 
 ### 3.5 动态加载与隔离

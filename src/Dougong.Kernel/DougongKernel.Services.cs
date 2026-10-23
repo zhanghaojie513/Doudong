@@ -12,8 +12,11 @@ public sealed partial class DougongKernel
                 if (kernel._disposed) return null;
                 if (consumer is { } id && !kernel.CanConsume(id, generation)) return null;
                 var matches = kernel._services.Find(typeof(TService), name);
-                if (matches.Count != 1) return null;
-                var match = matches[0];
+                if (matches.Count == 0) return null;
+                if (consumer is { } consumerId && kernel.PreferredProviderFor(consumerId, typeof(TService), name) is { } preferred)
+                    matches = [.. matches.Where(e => e.Owner == preferred)];
+                var match = ServiceTable.SelectByPriority(matches);
+                if (match is null) return null;
                 if (!kernel.CanProvide(match.Owner, match.Generation)) return null;
                 return new ServiceReference<TService>(kernel, match, consumer, generation);
             }

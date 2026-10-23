@@ -36,8 +36,11 @@ internal sealed class RevisionSubscription : IDisposable
     }
 
     public async IAsyncEnumerable<StateDelta> ReadAllAsync(
+        IReadOnlyList<StateDelta> replay,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        foreach (var delta in replay) yield return delta;
+
         await foreach (var delta in _channel.Reader.ReadAllAsync(cancellationToken))
             yield return delta;
 
