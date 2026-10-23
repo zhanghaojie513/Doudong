@@ -106,7 +106,7 @@ public sealed partial class DougongKernel
             // 停用过程新产生的失败或超时同样阻止卸载。
             if (entry.Generation != generation || !ReferenceEquals(entry.Loaded, loaded)
                 || entry.State != PluginState.Stopped || entry.Context is not null
-                || entry.CleanupFailed || entry.DrainTimedOut || entry.IsolationReason is not null)
+                || entry.CleanupFailed || entry.IsolationReason is not null)
             {
                 entry.Unloading = false;
                 throw new InvalidOperationException(

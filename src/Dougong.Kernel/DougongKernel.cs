@@ -129,10 +129,8 @@ internal sealed class PluginEntry
     public PluginState State { get; set; } = PluginState.Registered;
     public bool DesiredActive { get; set; }
     public bool CleanupFailed { get; set; }
-    public bool DrainTimedOut { get; set; }
     public string? IsolationReason { get; set; }
     public bool Unloading { get; set; }
-    public Task? UnloadTask { get; set; }
     public Exception? LastActivationError { get; set; }
     public long ActivationSequence { get; set; }
     public long Generation { get; set; }
@@ -346,7 +344,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
             if (expectedContext is not null && !ReferenceEquals(entry.Context, expectedContext))
                 return ToHandle(entry);
             ObjectDisposedException.ThrowIf(_disposed && expectedContext is null, this);
-            if (entry.IsolationReason is not null || entry.DrainTimedOut)
+            if (entry.IsolationReason is not null)
             {
                 entry.DesiredActive = false;
                 return ToHandle(entry);
@@ -417,8 +415,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
                     var stopNeeded = false;
                     foreach (var entry in _entries.Values)
                     {
-                        if (entry.Context is null || entry.DrainTimedOut
-                            || entry.IsolationReason is not null) continue;
+                        if (entry.Context is null || entry.IsolationReason is not null) continue;
                         var missing = MissingRequirements(entry);
                         if (entry.DesiredActive && !entry.Context.IsClosed
                             && !entry.Context.Invocations.IsClosed
@@ -1005,7 +1002,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
     }
 
     private bool HasIsolatedContexts() => _entries.Values.Any(
-        e => e.IsolationReason is not null || e.DrainTimedOut || e.Context is not null);
+        e => e.IsolationReason is not null || e.Context is not null);
 
     private sealed class StateSubscription(DougongKernel owner, Action<PluginStateChange> observer) : IDisposable
     {

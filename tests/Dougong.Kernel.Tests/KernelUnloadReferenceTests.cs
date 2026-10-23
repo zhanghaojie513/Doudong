@@ -30,9 +30,9 @@ public sealed class KernelUnloadReferenceTests
         var kernel = new DougongKernel();
         var (weakAssembly, reference) = await LoadReferenceAndUnloadAsync(kernel);
 
-        Collect();
-
-        Assert.False(weakAssembly.IsAlive, "失效的服务引用或状态历史仍持有插件程序集。");
+        // ALC 回收不是确定性的，做有界重试；多次 GC 后仍存活才说明存在真实引用根。
+        var collected = await CollectUntilAsync(() => !weakAssembly.IsAlive);
+        Assert.True(collected, "失效的服务引用或状态历史仍持有插件程序集。");
         Assert.NotNull(reference);
         await Assert.ThrowsAsync<ObjectDisposedException>(
             async () => await reference.InvokeAsync((_, _) => ValueTask.CompletedTask));
@@ -53,6 +53,19 @@ public sealed class KernelUnloadReferenceTests
         Assert.NotNull(reference);
         await kernel.UnloadAsync(handle.Id).AsTask().WaitAsync(Timeout);
         return (weak, reference);
+    }
+
+    private static async Task<bool> CollectUntilAsync(Func<bool> condition)
+    {
+        for (var attempt = 0; attempt < 10 && !condition(); attempt++)
+        {
+            Collect();
+            if (condition()) return true;
+            await Task.Delay(50);
+        }
+
+        Collect();
+        return condition();
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

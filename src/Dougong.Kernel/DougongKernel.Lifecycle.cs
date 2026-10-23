@@ -35,7 +35,7 @@ public sealed partial class DougongKernel
 
     private static void EnsureReusable(PluginEntry entry)
     {
-        if (entry.CleanupFailed || entry.DrainTimedOut || entry.IsolationReason is not null)
+        if (entry.CleanupFailed || entry.IsolationReason is not null)
             throw new InvalidOperationException($"插件 '{entry.Id}' 未干净停止：{entry.IsolationReason ?? "清理失败或排空超时"}；需重启宿主。");
     }
 

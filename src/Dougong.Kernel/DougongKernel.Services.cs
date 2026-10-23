@@ -115,7 +115,7 @@ public sealed partial class DougongKernel
                 || !ReferenceEquals(entry.Context, context))
                 return;
             // 排空超时或已隔离的代次不允许经 Context 绕过内核继续清理。
-            if (entry.IsolationReason is not null || entry.DrainTimedOut)
+            if (entry.IsolationReason is not null)
                 throw new InvalidOperationException(
                     $"插件 '{context.PluginId}' 未能干净停止；必须重启宿主，不能单独清理该上下文。");
             entry.DesiredActive = false;
@@ -138,7 +138,7 @@ public sealed partial class DougongKernel
                 invalidated = false;
                 foreach (var entry in _entries.Values)
                 {
-                    if (entry.Context is not { } current || entry.DrainTimedOut
+                    if (entry.Context is not { } current 
                         || entry.IsolationReason is not null) continue;
                     var missing = MissingRequirements(entry);
                     if (entry.DesiredActive && !current.IsClosed && !current.Invocations.IsClosed

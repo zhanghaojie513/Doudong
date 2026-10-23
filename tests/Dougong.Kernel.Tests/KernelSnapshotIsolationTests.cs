@@ -39,10 +39,19 @@ public sealed class KernelSnapshotIsolationTests
         var kernel = new DougongKernel();
         var (weakAssembly, handle, snapshot) = await LoadRetainAndUnloadAsync(kernel);
 
-        Collect();
+        // ALC 回收不是确定性的：JIT、运行时缓存和 GC 时机都可能让程序集暂时存活。
+        // 这里做有界重试，而不是单次 Collect 后就断言，否则测试会随机失败。
+        var collected = false;
+        for (var attempt = 0; attempt < 10 && !collected; attempt++)
+        {
+            Collect();
+            collected = !weakAssembly.IsAlive;
+            if (!collected) await Task.Delay(50);
+        }
 
-        Assert.False(weakAssembly.IsAlive,
-            "保留卸载前取得的句柄或快照不应阻止插件程序集回收。");
+        Assert.True(collected,
+            "保留卸载前取得的句柄或快照不应阻止插件程序集回收。"
+            + "（多次 GC 后仍存活，说明存在真实的外部引用根，而不是 GC 时机问题。）");
         Assert.NotEmpty(snapshot);
         GC.KeepAlive(handle);
         GC.KeepAlive(snapshot);

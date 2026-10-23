@@ -62,11 +62,15 @@ public sealed record PluginManifest
         ArgumentException.ThrowIfNullOrWhiteSpace(version);
         Id = id;
         Version = version;
-        RequiredServices = requiredServices ?? [];
-        DependsOn = dependsOn ?? [];
-        ContractVersions = contractVersions ?? [];
+        // 复制为只读快照：调用方后续改动原集合不能悄悄改变内核的依赖判定。
+        RequiredServices = Copy(requiredServices);
+        DependsOn = Copy(dependsOn);
+        ContractVersions = Copy(contractVersions);
         foreach (var contract in ContractVersions) contract.Parse();
     }
+
+    private static IReadOnlyList<T> Copy<T>(IReadOnlyList<T>? source) =>
+        source is null ? Array.AsReadOnly(Array.Empty<T>()) : Array.AsReadOnly(source.ToArray());
 
     public PluginId Id { get; }
 
