@@ -130,6 +130,7 @@ dotnet pack Dougong.slnx -c Release --output ./artifacts/packages
 | [前沿调查](docs/frontier-roadmap.md) | Agent Harness、协议、隔离和记忆评测的公开进展 |
 | [未来路线](docs/iteration-roadmap.md) | M3 之后的演进方向和退出条件 |
 | [Skill 演进](docs/skills-evolution.md) | 复盘、沉淀、审批和加载的 Skill 进化设想 |
+| [开发历程素材](docs/dev-journey.md) | M0 期间真实发生的问题与判断错误，供开发记录梳理 |
 
 ## 路线图
 
