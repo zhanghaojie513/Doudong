@@ -2,13 +2,13 @@
 
 > 执行入口：技术契约见 [architecture.md](architecture.md)，总体决策与验收见 [design.md](design.md)。完成设计、完成实现和通过验收分别记录；新会话从本文件进入。
 
-## 当前状态（2026-10-23 修复后）
+## 当前状态（2026-10-24）
 
-- 候选设计已按技术评审修订；公共 API 仍为 experimental。M0 审核发现的阻断问题已修复，待独立复审确认后再关闭 M0。
-- 实际工程为 6 个产品项目 + 1 个测试项目 + 3 个样例项目（新增共享契约样例）；Telemetry 未建，产品项目无外部 NuGet 引用。Agent/Ai/Mcp/Acp 尚无业务实现，CLI 仅输出占位文字。
+- M0 已关闭：三轮审核问题全部修复，13 项独立探测通过，验收项逐条勾选并附证据。公共 API 仍为 experimental。
+- 实际工程为 6 个产品项目 + 1 个测试项目 + 5 个样例工程 + 1 个对比探针工程。Agent 已有契约与最小 dispatcher；Ai/Mcp/Acp 仍为空工程；CLI 仍为占位。Telemetry 未建。
 - 已修复本轮审核问题：排空超时后拒绝再激活与卸载；`UnloadAsync` 在停用后重新核验失败标志与最终状态；`LoadAsync` 取消/失败回滚残留条目；激活、取消、服务排空、事件排空与清理各自有独立预算；`Context.DisposeAsync` 走内核协调器，不能绕过隔离；`ResolveAll` 返回全部提供方；清理顺序按实际依赖边计算；普通退订立即从事件总线移除并可回收；事件先排空再清理；状态提交在锁内原子完成，新增登记/移除增量与共享诊断 DTO。
-- .NET SDK 10.0.402 可用；完整解决方案 Release 构建通过（0 警告、0 错误），148 项内核行为测试全部通过（0 跳过）。
-- 首个提交 `5c1bbe5` 及后续内核切片均已推送至 [GitHub 仓库](https://github.com/zhanghaojie513/Dougong)。本轮修复尚未提交。
+- .NET SDK 10.0.402 可用；完整解决方案 Release 构建通过（0 警告、0 错误），156 项内核行为测试全部通过（0 跳过）。
+- 首个提交 `5c1bbe5` 及后续切片均已推送至 [GitHub 仓库](https://github.com/zhanghaojie513/Doudong)。
 - [前沿调查](frontier-roadmap.md)与[未来迭代路线](iteration-roadmap.md)已建立；后者面向 M3 之后，不作为当前 M0 已完成的证据。
 - M0 期间的实现缺陷、测试缺陷与判断错误已整理到[开发历程素材](dev-journey.md)，供后续梳理开发记录使用；该文件不是验收依据。
 
@@ -31,27 +31,59 @@
 
 ## M0 内核任务与验收
 
-- [ ] 契约与组合根：静态/动态注册、期望启用状态、激活代次、必需能力和作用域租约。
-  - 静态/动态注册、期望状态、激活代次、调用租约均已实现并有行为测试。
-- [ ] 生命周期协调器：静态注册的激活暂存/提交/回滚及一致切面已通过行为测试，插件回调不持内部锁；动态注册等完整生命周期验收仍待实现。
-  - 静态与动态注册共用同一协调器；激活暂存/提交/回滚、锁外清理均已验证。
-- [ ] 需求图：必需缺失/恢复、可选空集合后新增、多提供方选择/冲突和依赖环诊断。
-  - 已实现必需/可选服务需求、可选空集合后新增、插件级依赖激活顺序、缺失依赖阻塞、依赖环注册期拒绝（含完整路径）、按 `ProviderId` 显式选择，以及按注册优先级自动选出唯一最优提供方（最高优先级并列仍判歧义）。
-- [ ] 停用排空：拒绝新调用、等待在途、逆序幂等清理、错误聚合与忽略取消诊断；禁止重叠代次。
-  - 已实现代次绑定调用租约、批次封口、取消、在途排空、按实际依赖边排序的清理、分阶段超时预算与隔离代次。裸 `Services.Resolve` 只对本次激活回调的异步流开放；清理超时会停止同批次后续清理；cleanup 收到可取消令牌。排空超时后拒绝再激活、卸载和 Context 直接销毁。
-- [ ] 事件通知：每会话/内核版本顺序、有界队列、异常隔离、快照重同步、退订后在途排空。
-  - 已实现每订阅有界队列、发布只入队、处理器异常隔离、队列满断开订阅并诊断、普通退订立即移除引用、事件先排空再清理；状态快照与增量在锁内原子提交，增量带分区、登记/移除类型，支持溢出重同步与游标续订。
-- [ ] 动态加载：共享契约白名单、完整支持范围验证、私有依赖解析、清理外部引用和重新加载。
-  - 已实现 collectible ALC + `AssemblyDependencyResolver`、显式共享契约登记、`LoadAsync`/`UnloadAsync`、契约版本校验与拒载、停用后重新核验才允许卸载、多轮装卸后程序集回收验证。
-- [ ] 示例与测试：真实服务/事件、失败激活、并发启停、清理和服务事务回滚已有行为测试；慢观察者、动态加载及多轮调用后 WeakReference 卸载仍待实现。
-  - 已补真实跨 ALC 共享契约（服务调用与事件双向）、共享观察者阻塞下的修订顺序、注册/移除增量重建、失败卸载与隔离代次回归测试。
-- [ ] architecture.md §3.7 与 §3.4 全部用例通过；只有“两个插件能加载”不足以开启 M1 正式实现。
-  - §3.7 列出的反例均已有对应测试；跨 ALC 服务与事件验收已改为真实共享契约程序集，不再依赖反射读取清单。§3.4 的分区标记、游标续订、溢出重同步、并发提交顺序也已覆盖。最终关闭仍待独立复审。
+> 2026-10-24：以下勾选依据是**实测**而非文档承诺。每项附证据位置；独立探测工程位于
+> 仓库外 `%TEMP%/dougong-m0-final`，13 项全部 PASS。M0 据此关闭。
+
+- [x] 契约与组合根：静态/动态注册、期望启用状态、激活代次、必需能力和作用域租约。
+  - 证据：`KernelM0AcceptanceTests`、`KernelServiceTransactionTests`、`KernelServiceLeaseTests`；
+    探测 `lifecycle-concurrent`、`resolveall-all`。
+- [x] 生命周期协调器：静态/动态注册的激活暂存/提交/回滚及一致切面；插件回调不持内部锁。
+  - 证据：`KernelDependencyTests.Cleanup_can_query_kernel_during_stop_rollback_and_disposal`、
+    `KernelIsolationTests`、`KernelRecoveryRegressionTests`；探测 `isolation-rejects-reuse`。
+- [x] 需求图：必需缺失/恢复、可选空集合后新增、多提供方选择/冲突和依赖环诊断。
+  - 证据：`KernelDependencyGraphTests`、`KernelProviderSelectionTests`、`KernelProviderPriorityTests`、
+    `KernelManifestImmutabilityTests`（清单为只读快照，外部改动不能改变依赖判定）。
+- [x] 停用排空：拒绝新调用、等待在途、逆序幂等清理、错误聚合与忽略取消诊断；禁止重叠代次。
+  - 证据：`KernelServiceLeaseTests`、`KernelReview2RegressionTests`（清理超时停止后续清理、
+    取消回调预算）、`KernelR3DependencyRegressionTests`（按实际依赖边排序）；
+    探测 `cleanup-consumer-before-used-provider`、`stale-reference-dead`。
+- [x] 事件通知：内核版本顺序、有界队列、异常隔离、快照重同步、退订后在途排空。
+  - 证据：`KernelEventBusTests`、`EventBusLifecycleRegressionTests`、`KernelStateCommitTests`；
+    探测 `event-unsubscribe-releases`、`event-self-stop-rejected`。
+- [x] 动态加载：共享契约白名单、完整支持范围验证、私有依赖解析、清理外部引用和重新加载。
+  - 证据：`KernelDynamicLoadingTests`、`KernelContractVersionTests`、`KernelCrossAlcAcceptanceTests`、
+    `KernelSharedContractTests`、`KernelSharedContractMissingTests`、`KernelUnloadReferenceTests`；
+    探测 `unload-idempotent-rejects`、`missing-shared-contract-rollback`。
+- [x] 示例与测试：真实服务/事件、失败激活、并发启停、清理和服务事务回滚、慢观察者、
+  动态加载及多轮调用后 WeakReference 卸载。
+  - 证据：`KernelSnapshotIsolationTests`（快照不钉住 ALC）、`KernelCrossAlcAcceptanceTests`
+    （真实共享契约的服务与事件双向）、`KernelUnloadReferenceTests`。
+- [x] architecture.md §3.7 与 §3.4 全部用例通过。
+  - 证据：上述测试与 13 项独立探测；探测 `state-revision-monotonic`、
+    `state-stream-ends-on-dispose`、`state-registered-delta`。
+
+### 关闭前最后一轮修复（2026-10-24）
+
+- `PluginManifest` 曾持有调用方传入集合的引用：外部 `Clear()` 可绕过必需依赖使消费者直接
+  `Active`；激活后注入需求又会让已激活插件变 `Blocked`。已改为构造时复制为只读快照。
+  测试 `KernelManifestImmutabilityTests`；探测 `manifest-mutation-before-register`（修复前
+  `Active`，修复后 `Blocked`）与 `manifest-mutation-after-active`。
+- 移除只读死字段 `PluginEntry.DrainTimedOut`（隔离实际由 `IsolationReason` 承载）与未使用的
+  `UnloadTask`；行为不变，156 项测试全绿。
 
 ## M1 入口与执行契约
 
-- [ ] 用同一假模型/工具测试 design.md §2.1 两个候选，再用真实 provider 比较；记录版本、复现命令和选择理由。
+- [x] 用同一假模型/工具测试 design.md §2.1 两个候选；记录版本、复现命令和选择理由。
+  - 证据：[m1-candidate-comparison.md](m1-candidate-comparison.md)。两候选在同一 10 项反例集上
+    均 10/10；最终选**候选 B（自研循环）**，依据是候选 A 存在可复现的事件顺序错误、
+    终止原因错误、每场景多一轮模型调用，且关闭旁路依赖带 `ExperimentalAttribute` 的
+    `EnableInvocableFunctionBypassing`。
+  - **未完成**：真实 provider 对比未运行（`DEEPSEEK_API_KEY` 未提供），此项仍为待验证。
 - [ ] 唯一 dispatcher：schema/参数规范化、审批身份绑定、执行前校验、调用去重、资源冲突和取消终态。
+  - 已实现（`src/Dougong.Agent/ToolDispatcher.cs`）：最小 JSON schema 校验（顶层 type 与 required）、
+    调用 ID 去重、权限描述采集、七种明确终态、旁路检测用的调用记录。
+  - **未实现**：审批流程、资源锁与工作区独占、执行前文件版本复核、完整 schema 校验器。
+    因此当前不得宣称具备“批准 A 执行 B”的防护。
 - [ ] 显式存储提交、单写者租约、半条尾记录处理、结果未知恢复、分支一致切面及预算/压缩失败协议。
 - [ ] 存储失败、工具副作用后未提交、同文件写冲突、跨会话 shell、工具替换、流式参数不全等故障测试。
 - [ ] 真实编码任务与 CLI 构建/打包通过；模型/工具代码实际接入后再记录已验证能力。
@@ -103,4 +135,6 @@
 - 2026-10-23：第二轮独立复审发现 6 项实现与契约不符：激活窗口可从无关异步流借用、清理超时后仍清理提供方、`DeactivateAsync` 取消回调无预算、cleanup 令牌不可取消、观察者诊断仍持有插件异常、内核销毁后状态流不结束，另加历史上限缺少校验。已全部修复并补回归测试；复审探测 6 项均返回期望值，Release 构建与 140 项内核测试通过。
 - 2026-10-23：处理外部引用治理：`PluginHandle`/`PluginSummary` 不再携带 `PluginManifest`，只保留 Id/Version/State；完整清单改由 `GetPluginManifestAsync` 显式取得。实证保留快照不再阻止动态插件 ALC 回收，显式持有清单仍会（属调用方主动选择）。Release 构建与 143 项内核测试通过。
 - 2026-10-23：最终复审发现共享契约登记是进程级静态状态且不可撤销，漏配时插件会先登记、激活失败、留下不可卸载的隔离代次。改为 `DougongKernel.RegisterSharedContract`（按内核实例隔离、返回句柄可撤销）；装配解析失败时 `LoadAsync` 回滚条目并抛出提示登记契约的可操作诊断。Release 构建与 146 项内核测试通过。
+- 2026-10-24：M0 关闭复审：`PluginManifest` 改为只读快照（外部改动不再能绕过依赖判定），移除死字段；13 项独立探测全部通过，M0 验收项据此勾选。
+- 2026-10-24：M1 首批：落地 `IAgentRuntime`/`IToolDispatcher`/`IAgentTool` 契约与最小 dispatcher；用 10 项确定性反例对比 MAF 包装与自研循环，均 10/10，选择自研循环（详见 m1-candidate-comparison.md）。真实 provider 对比待验证。
 - 2026-10-23：补漏配路径的进程内回归：新增 `Dougong.Sample.Isolated`（测试项目刻意不引用）与对应插件，未登记时装配解析必然失败，因此能在 CI 中真实覆盖拒绝与回滚；测试先断言该前提，误引用会显式失败而非静默假通过。同时修正 `LoadAsync` 在类型发现阶段抛 `ReflectionTypeLoadException` 时未给出可操作诊断的问题。Release 构建与 148 项内核测试通过。
