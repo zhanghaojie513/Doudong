@@ -222,6 +222,6 @@ Claude Code 明确不支持原生 Windows 沙箱；Codex 的隔离以 macOS/Linu
 - Hermes Agent Self-Evolution — README：https://github.com/NousResearch/hermes-agent-self-evolution
 - SWE-bench：https://www.swebench.com/
 - Terminal-Bench：https://www.tbench.ai/
-- NuGet 版本：https://api.nuget.org/v3-flatcontainer/{package}/index.json（M.E.AI 10.11.0、MAF 1.25.0、Harness 1.25.0、MCP 2.3.0）
+- NuGet 版本：https://api.nuget.org/v3-flatcontainer/{package}/index.json（M.E.AI 10.11.0、MAF 1.26.0、Harness 独立包 Microsoft.Agents.AI.Harness 1.26.0、MCP 2.3.0；2026-10-24 复核）
 
 未能访问：Codex 安全文档（403）、dsh 架构目录（超时）、SWE-bench/Terminal-Bench GitHub 仓库（超时）。相关判断以上述可访问来源为限。

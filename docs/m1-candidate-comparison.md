@@ -17,10 +17,22 @@
 
 **共同前提**：两个候选都**不向模型层传工具**。工具 schema 以文本注入系统提示，函数调用由运行时解析后交给 dispatcher。这样比较的是循环本身，而不是"框架自动执行工具"的能力。
 
-这个设计决定本身来自一条实测发现：MAF 1.26.0 中关闭函数旁路所需的
-`ChatClientAgentOptions.EnableInvocableFunctionBypassing` 带有 `ExperimentalAttribute`，
-编译时会产生 `MAAI001` 诊断（"仅用于评估，将来可能更改或删除"）。
-因此本条路径不适合作为生产依赖。
+这个设计决定本身来自两条实测发现（2026-10-24 补充 Harness 复查后仍成立）：
+
+1. `ChatClientAgentOptions.EnableInvocableFunctionBypassing` 带有 `ExperimentalAttribute`，
+   编译时产生 `MAAI001` 诊断（"仅用于评估，将来可能更改或删除"）。
+2. **Harness 复查**：`HarnessAgent` 位于独立包 `Microsoft.Agents.AI.Harness 1.26.0`
+   （初次对比时探测的是 `Microsoft.Agents.AI`，遗漏了该包）。`HarnessAgentOptions`
+   提供**非实验性**开关，但实测两个开关都无法关闭自动执行——
+   `DisableToolAutoApproval = true` 的语义是"跳过审批直接执行"，设置后工具仍被框架执行
+   （`toolExecuted=1`，流中出现 `FunctionResultContent`）；
+   `DisableApprovalNotRequiredFunctionBypassing = true` 后行为完全相同。
+   MAF 自带的审批体系（`ToolApprovalAgent`）执行点仍在框架内部，不经过宿主 dispatcher，
+   按 design.md §2.1 "无法证明旁路已关闭的候选不能通过验证"判定不通过。
+
+Harness 内置的压缩、Todo、技能等能力全部依赖框架内部工具执行，与"唯一 dispatcher"
+的硬约束冲突；不传工具使用 Harness 则只剩一个模型调用包装，而其压缩策略本身
+（`CompactionStrategy`）仍带 `ExperimentalAttribute`。
 
 ## 2. 反例集与结果
 
