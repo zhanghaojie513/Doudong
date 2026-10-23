@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Dougong Acp 层——ACP Agent 端实现（JSON-RPC over stdio，M2 引入）</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dougong.Agent\Dougong.Agent.csproj" />
+  </ItemGroup>
+
+</Project>

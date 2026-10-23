@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Dougong Agent 运行时——agent loop、append-only JSONL 会话、工具管线、审批、上下文压缩</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dougong.Kernel\Dougong.Kernel.csproj" />
+  </ItemGroup>
+
+</Project>

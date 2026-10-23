@@ -1,0 +1,17 @@
+<Project>
+
+  <!-- 全仓库公共属性；包版本统一在 Directory.Packages.props（CPM） -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <Version>0.1.0-alpha.1</Version>
+    <Authors>Haojie Zhang</Authors>
+    <RepositoryUrl>https://github.com/placeholder/dougong</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+</Project>

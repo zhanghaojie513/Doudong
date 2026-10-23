@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Dougong Mcp 层——MCP server ↔ 插件桥接（底座官方 ModelContextProtocol SDK，M2 引入）</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dougong.Kernel\Dougong.Kernel.csproj" />
+  </ItemGroup>
+
+</Project>

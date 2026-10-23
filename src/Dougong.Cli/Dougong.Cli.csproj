@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>dougong</ToolCommandName>
+    <Description>dougong——headless 参考宿主（dotnet tool）</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dougong.Kernel\Dougong.Kernel.csproj" />
+    <ProjectReference Include="..\Dougong.Agent\Dougong.Agent.csproj" />
+    <ProjectReference Include="..\Dougong.Ai\Dougong.Ai.csproj" />
+    <ProjectReference Include="..\Dougong.Mcp\Dougong.Mcp.csproj" />
+    <ProjectReference Include="..\Dougong.Acp\Dougong.Acp.csproj" />
+  </ItemGroup>
+
+</Project>

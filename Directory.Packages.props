@@ -1,0 +1,17 @@
+<Project>
+
+  <PropertyGroup>
+    <!-- M0：内核零第三方依赖（设计红线，docs/design.md §3）。
+         首批包随里程碑引入：
+           M1: Microsoft.Extensions.AI 10.11.0（已核实版本）
+           M2: ModelContextProtocol 2.3.0、OpenTelemetry.*
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.0.2" />
+  </ItemGroup>
+
+</Project>

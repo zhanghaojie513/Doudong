@@ -1,0 +1,21 @@
+# 构建产物
+bin/
+obj/
+artifacts/
+TestResults/
+
+# IDE
+.vs/
+.idea/
+*.user
+*.suo
+
+# 环境产物（本机代理工具目录，不属于项目）
+.v2c/
+.video_agent/
+tmpwebapp-*.log
+*.log
+
+# 系统
+.DS_Store
+Thumbs.db

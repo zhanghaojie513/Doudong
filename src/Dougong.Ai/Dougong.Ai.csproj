@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Dougong Ai 层——IChatClient 工厂、模型路由、用量记账（底座 Microsoft.Extensions.AI，M1 引入）</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dougong.Agent\Dougong.Agent.csproj" />
+  </ItemGroup>
+
+</Project>

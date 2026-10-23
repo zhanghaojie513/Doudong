@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- M0 主战场：插件内核契约（IPlugin / PluginContext / DougongKernel）见 docs/architecture.md §3。
+       依赖红线：仅 BCL + M.E.DependencyInjection.Abstractions（设计 §3）。 -->
+  <PropertyGroup>
+    <Description>Dougong 插件内核——一切皆插件的承托层（生命周期 / 服务注册表 / 事件总线 / ALC 动态加载）</Description>
+  </PropertyGroup>
+
+</Project>

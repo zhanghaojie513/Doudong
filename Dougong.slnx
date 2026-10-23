@@ -1,0 +1,9 @@
+<Solution>
+  <Project Path="src/Dougong.Kernel/Dougong.Kernel.csproj" />
+  <Project Path="src/Dougong.Agent/Dougong.Agent.csproj" />
+  <Project Path="src/Dougong.Ai/Dougong.Ai.csproj" />
+  <Project Path="src/Dougong.Mcp/Dougong.Mcp.csproj" />
+  <Project Path="src/Dougong.Acp/Dougong.Acp.csproj" />
+  <Project Path="src/Dougong.Cli/Dougong.Cli.csproj" />
+  <Project Path="tests/Dougong.Kernel.Tests/Dougong.Kernel.Tests.csproj" />
+</Solution>
