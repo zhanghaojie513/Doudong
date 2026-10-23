@@ -26,9 +26,8 @@ public sealed class KernelCrossAlcAcceptanceTests
     [Fact]
     public async Task Shared_contract_types_resolve_to_the_same_assembly_instance()
     {
-        PluginLoadContext.RegisterSharedContract(typeof(IGreetingService).Assembly);
-
         await using var kernel = new DougongKernel();
+        using var shared = kernel.RegisterSharedContract(typeof(IGreetingService).Assembly);
         var handle = await kernel.LoadAsync(
                 ContractsAssemblyPath(), "Dougong.Sample.Contracts.SharedContractPlugin")
             .AsTask().WaitAsync(Timeout);
@@ -45,10 +44,9 @@ public sealed class KernelCrossAlcAcceptanceTests
     [Fact]
     public async Task Shared_contract_event_flows_into_and_out_of_the_plugin_alc()
     {
-        PluginLoadContext.RegisterSharedContract(typeof(IGreetingService).Assembly);
         GreetingProbe.Reset();
-
         await using var kernel = new DougongKernel();
+        using var shared = kernel.RegisterSharedContract(typeof(IGreetingService).Assembly);
         await kernel.LoadAsync(
                 ContractsAssemblyPath(), "Dougong.Sample.Contracts.SharedContractPlugin")
             .AsTask().WaitAsync(Timeout);

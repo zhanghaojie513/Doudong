@@ -20,7 +20,7 @@ public sealed partial class DougongKernel
         if (!File.Exists(fullPath))
             throw new FileNotFoundException($"插件程序集不存在：{fullPath}", fullPath);
 
-        var context = new PluginLoadContext(fullPath);
+        var context = new PluginLoadContext(fullPath, _sharedContracts);
         try
         {
             var assembly = context.LoadFromAssemblyPath(fullPath);
@@ -124,33 +124,77 @@ public sealed partial class DougongKernel
         try
         {
             await EvaluateAsync(cancellationToken).ConfigureAwait(false);
-            return GetHandle(manifest.Id);
+            var handle = GetHandle(manifest.Id);
+
+            // 动态加载的插件若因缺少程序集而激活失败，几乎必然是宿主漏配共享契约。
+            // 这种配置错误不应留下不可卸载的隔离条目，而是回滚并抛出可操作异常。
+            if (loaded is not null && handle.State == PluginState.Failed
+                && FindActivationLoadError(manifest.Id) is { } loadError)
+            {
+                RollBackRegistration(manifest.Id, loaded);
+                throw loadError;
+            }
+
+            return handle;
+        }
+        catch (LifecycleConfigurationException)
+        {
+            RollBackRegistration(manifest.Id, loaded);
+            throw;
         }
         catch
         {
             // 登记已提交但评估失败：撤销本次条目的启用意图，并按身份回滚。
-            bool remove = false;
-            lock (_sync)
-            {
-                remove = _entries.TryGetValue(manifest.Id, out var entry)
-                    && ReferenceEquals(entry.Loaded, loaded)
-                    && entry.State is PluginState.Registered or PluginState.Blocked
-                    && entry.Context is null;
-                if (remove)
-                {
-                    _entries.Remove(manifest.Id);
-                    ForgetDependencies(manifest.Id, 0);
-                    CommitRemoved(entry!);
-                }
-                else if (_entries.TryGetValue(manifest.Id, out var retained))
-                {
-                    retained.DesiredActive = false;
-                }
-            }
-
-            if (remove) loaded?.Detach();
+            RollBackRegistration(manifest.Id, loaded);
             throw;
         }
+    }
+
+    private sealed class LifecycleConfigurationException(string message, Exception inner)
+        : InvalidOperationException(message, inner);
+
+    private LifecycleConfigurationException? FindActivationLoadError(PluginId id)
+    {
+        lock (_sync)
+        {
+            if (!_entries.TryGetValue(id, out var entry) || entry.CleanupFailed) return null;
+            if (FindMissingAssembly(entry.LastActivationError) is not { } missing) return null;
+            return new LifecycleConfigurationException(
+                $"插件 '{id}' 无法加载程序集 '{missing}'。若它是宿主与插件共享的契约，"
+                + $"请在加载前调用 {nameof(DougongKernel)}.{nameof(RegisterSharedContract)} 登记；"
+                + "否则请确认该依赖随插件一同部署。", entry.LastActivationError!);
+        }
+
+        static string? FindMissingAssembly(Exception? error)
+        {
+            for (var current = error; current is not null; current = current.InnerException)
+                if (current is FileNotFoundException { FileName: { } name }) return name;
+            return null;
+        }
+    }
+
+    private void RollBackRegistration(PluginId id, LoadedPlugin? loaded)
+    {
+        bool remove = false;
+        lock (_sync)
+        {
+            remove = _entries.TryGetValue(id, out var entry)
+                && ReferenceEquals(entry.Loaded, loaded)
+                && entry.Context is null
+                && entry.State is PluginState.Registered or PluginState.Blocked or PluginState.Failed;
+            if (remove)
+            {
+                _entries.Remove(id);
+                ForgetDependencies(id, 0);
+                CommitRemoved(entry!);
+            }
+            else if (_entries.TryGetValue(id, out var retained))
+            {
+                retained.DesiredActive = false;
+            }
+        }
+
+        if (remove) loaded?.Detach();
     }
 
     private static Type FindPluginType(Assembly assembly, string? typeName)

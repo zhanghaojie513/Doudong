@@ -183,9 +183,9 @@ Stopped → Unloading → Unloaded（已脱离宿主，GC 回收另行验证）
 }
 ```
 
-- 加载：`PluginLoadContext : AssemblyLoadContext(isCollectible: true)` + `AssemblyDependencyResolver`。共享程序集白名单默认为 `Dougong.Kernel`，宿主可显式登记额外的共享契约程序集；显式登记的契约始终解析到宿主的同一程序集实例，其余依赖保持插件私有。M3 可按实际 API 边界评估抽取独立契约包。
+- 加载：`PluginLoadContext : AssemblyLoadContext(isCollectible: true)` + `AssemblyDependencyResolver`。共享程序集白名单默认为 `Dougong.Kernel`，宿主通过 `DougongKernel.RegisterSharedContract` 显式登记额外的共享契约程序集（按内核实例隔离、可撤销）；显式登记的契约始终解析到宿主的同一程序集实例，其余依赖保持插件私有。M3 可按实际 API 边界评估抽取独立契约包。
 
-已实现：`DougongKernel.LoadAsync(assemblyPath, typeName?)` 在独立 collectible 上下文中加载插件。共享白名单默认为 `Dougong.Kernel`；宿主可用 `PluginLoadContext.RegisterSharedContract(assembly)` 显式声明额外的共享契约程序集（例如示例中的 `Dougong.Sample.Shared`），这些程序集始终解析到宿主已加载的同一实例，其余依赖走 `AssemblyDependencyResolver`。`UnloadAsync` 先停用排空，再重新核验代次、失败标志和最终状态，只有干净停止才移除条目与服务、释放入口类型引用并调用 `Unload()`；清理失败、排空超时或本次停用中新产生的失败都会拒绝卸载并保留条目。`LoadAsync` 在登记后若评估被取消或失败，会撤销本次条目以免留下稍后自动激活的残留插件。契约版本范围校验已实现。
+已实现：`DougongKernel.LoadAsync(assemblyPath, typeName?)` 在独立 collectible 上下文中加载插件。共享白名单默认为 `Dougong.Kernel`；宿主可用 `DougongKernel.RegisterSharedContract(assembly)` 显式登记额外的共享契约程序集，登记按内核实例隔离、返回句柄可撤销，这些程序集始终解析到宿主已加载的同一实例，其余依赖走 `AssemblyDependencyResolver`。若动态插件在首次激活时因缺少程序集而失败（最常见的原因是宿主漏配共享契约），`LoadAsync` 会回滚该条目、不留下隔离代次，并抛出一条提示调用 `RegisterSharedContract` 的诊断。`UnloadAsync` 先停用排空，再重新核验代次、失败标志和最终状态，只有干净停止才移除条目与服务、释放入口类型引用并调用 `Unload()`；清理失败、排空超时或本次停用中新产生的失败都会拒绝卸载并保留条目。`LoadAsync` 在登记后若评估被取消或失败，会撤销本次条目以免留下稍后自动激活的残留插件。契约版本范围校验已实现。
 - 第三方跨插件服务使用独立、稳定的共享契约程序集；宿主预先验证兼容范围。实现依赖留在插件私有上下文；不支持的契约版本明确拒载，不能用同名类型字符串绕过类型同一性检查。
 - **停止与卸载分离**：`DeactivateAsync` 停止当前激活代次并释放其作用域，保留已加载代码；再激活创建新作用域。`UnloadAsync` 先停止和排空，再释放入口实例、工厂、服务 Type 键、事件频道、队列、任务及诊断中的外部引用，调用 `ALC.Unload()`。清理失败/超时不进入成功卸载状态。卸载后只保留字符串/共享 DTO 描述，重新启用必须重新加载新实例。
 - **卸载契约**：清理回调逆序、幂等执行；单个回调失败仍继续清理并聚合错误；清理超时则停止同批次后续清理、保留依赖资源并进入隔离。context 关闭后拒绝迟到注册。超时而不响应取消的代码不能强制中止，禁止重用该实例或重叠激活新代次，标记需重启宿主。独立线程、timer、委托和事件必须归作用域管理。

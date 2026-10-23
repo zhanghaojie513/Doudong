@@ -13,5 +13,6 @@
 动态插件样例使用 `EnableDynamicLoading`，并把 `Dougong.Kernel` 标记为不复制到输出，
 以便加载路径真实走 collectible AssemblyLoadContext。
 
-共享契约样例用于验证跨 ALC 类型同一性：宿主调用 `PluginLoadContext.RegisterSharedContract`
-显式登记契约程序集，插件程序集则不复制该契约。
+共享契约样例用于验证跨 ALC 类型同一性：宿主调用 `DougongKernel.RegisterSharedContract`
+登记契约程序集（按内核实例隔离、返回句柄可撤销），插件程序集则不复制该契约。
+漏配登记时，加载会因装配解析失败而回滚，并给出提示登记契约的诊断。

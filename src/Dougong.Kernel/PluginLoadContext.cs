@@ -10,38 +10,34 @@ namespace Dougong.Kernel;
 /// </summary>
 internal sealed class PluginLoadContext : AssemblyLoadContext
 {
-    private static readonly HashSet<string> SharedContracts = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> KernelContracts = new(StringComparer.OrdinalIgnoreCase)
     {
         "Dougong.Kernel",
     };
 
-    /// <summary>宿主显式声明共享的额外契约程序集；不会默认共享插件私有依赖。</summary>
-    private static readonly HashSet<string> HostSharedAssemblies = new(StringComparer.OrdinalIgnoreCase);
-
     private readonly AssemblyDependencyResolver _resolver;
+    private readonly SharedContractRegistry _shared;
 
-    /// <summary>登记宿主与插件共享的契约程序集名，须在加载插件前调用。</summary>
-    public static void RegisterSharedContract(Assembly assembly)
-    {
-        ArgumentNullException.ThrowIfNull(assembly);
-        if (assembly.GetName().Name is { } name) HostSharedAssemblies.Add(name);
-    }
-
-    public PluginLoadContext(string assemblyPath)
+    public PluginLoadContext(string assemblyPath, SharedContractRegistry shared)
         : base($"Dougong.Plugin:{Path.GetFileNameWithoutExtension(assemblyPath)}:{Guid.NewGuid():N}",
             isCollectible: true)
     {
         _resolver = new AssemblyDependencyResolver(assemblyPath);
+        _shared = shared;
     }
+
+    /// <summary>该程序集是否应解析到宿主实例：内核契约或宿主显式登记的共享契约。</summary>
+    internal static bool IsHostShared(string? name, SharedContractRegistry shared) =>
+        name is not null && (KernelContracts.Contains(name) || shared.Contains(name));
 
     protected override Assembly? Load(AssemblyName assemblyName)
     {
-        if (assemblyName.Name is { } name
-            && (SharedContracts.Contains(name) || HostSharedAssemblies.Contains(name)))
+        if (IsHostShared(assemblyName.Name, _shared))
         {
             // 先返回宿主已加载的实例，避免同一契约在不同 ALC 中各有一份。
             return AppDomain.CurrentDomain.GetAssemblies()
-                .FirstOrDefault(a => string.Equals(a.GetName().Name, name, StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(a => string.Equals(
+                    a.GetName().Name, assemblyName.Name, StringComparison.OrdinalIgnoreCase));
         }
 
         var path = _resolver.ResolveAssemblyToPath(assemblyName);

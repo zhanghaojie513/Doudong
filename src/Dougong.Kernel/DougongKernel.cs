@@ -133,6 +133,7 @@ internal sealed class PluginEntry
     public string? IsolationReason { get; set; }
     public bool Unloading { get; set; }
     public Task? UnloadTask { get; set; }
+    public Exception? LastActivationError { get; set; }
     public long ActivationSequence { get; set; }
     public long Generation { get; set; }
     public PluginContext? Context { get; set; }
@@ -168,6 +169,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
 
     private int _revisionHistoryLimit = 1024;
     private readonly EventBus _events;
+    private readonly SharedContractRegistry _sharedContracts = new();
     private readonly AsyncLocal<CallbackScope?> _callback = new();
     private readonly AsyncLocal<PluginContext?> _activationScope = new();
     private bool _disposed;
@@ -198,6 +200,13 @@ public sealed partial class DougongKernel : IAsyncDisposable
     /// 不持有插件 ALC 的异常对象。
     /// </summary>
     public PluginDiagnostic? LastObserverDiagnostic { get; private set; }
+
+    /// <summary>
+    /// 登记一个宿主与动态插件共享的契约程序集。必须在加载引用它的插件前调用；
+    /// 返回的句柄释放后撤销登记。未登记时加载会在登记插件之前明确拒绝。
+    /// </summary>
+    public IDisposable RegisterSharedContract(System.Reflection.Assembly assembly) =>
+        _sharedContracts.Register(assembly);
 
     public IDisposable SubscribeStateChanges(Action<PluginStateChange> observer)
     {
@@ -509,7 +518,14 @@ public sealed partial class DougongKernel : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            activationError = ex;
+            // 装配加载失败几乎总是宿主漏配共享契约，而不是插件逻辑错误；
+            // 提示可操作的修复方式，避免只看到底层 file-not-found。
+            activationError = ex is FileNotFoundException { FileName: { } missing }
+                ? new InvalidOperationException(
+                    $"插件 '{entry.Id}' 无法加载程序集 '{missing}'。若它是宿主与插件共享的契约，"
+                    + $"请在加载前调用 {nameof(DougongKernel)}.{nameof(RegisterSharedContract)} 登记；"
+                    + "否则请确认该依赖随插件一同部署。", ex)
+                : ex;
         }
 
         List<PluginStateChange> changes = [];
@@ -574,6 +590,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
             entry.Context = null;
             // 调用方取消表示本次启用请求已撤回；不能在同一评估循环里自动重试。
             if (callerCancelled) entry.DesiredActive = false;
+            entry.LastActivationError = activationError;
             entry.CleanupFailed = cleanupError is not null;
             Exception? error = activationError is not null && cleanupError is not null
                 ? new AggregateException(activationError, cleanupError) : activationError ?? cleanupError;
