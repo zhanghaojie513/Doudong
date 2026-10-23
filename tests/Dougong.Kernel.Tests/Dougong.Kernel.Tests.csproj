@@ -13,6 +13,7 @@
   <ItemGroup>
     <Using Include="Xunit" />
     <ProjectReference Include="..\..\src\Dougong.Kernel\Dougong.Kernel.csproj" />
+    <ProjectReference Include="..\..\samples\Dougong.Sample.Shared\Dougong.Sample.Shared.csproj" />
   </ItemGroup>
 
   <ItemGroup>

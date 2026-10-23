@@ -254,7 +254,7 @@ public sealed class KernelServiceLeaseTests
     [Fact]
     public async Task Drain_timeout_marks_failure_and_skips_cleanup()
     {
-        await using var kernel = new DougongKernel();
+        var kernel = new DougongKernel();
         kernel.DrainTimeout = TimeSpan.FromMilliseconds(200);
         var provider = new WorkerPlugin("test.provider", registerWorker: true);
         await kernel.RegisterAsync(() => provider);
@@ -282,6 +282,9 @@ public sealed class KernelServiceLeaseTests
         {
             release.TrySetResult();
             await invocation.WaitAsync(Timeout);
+            // 隔离代次保留未释放的资源；销毁必须如实报告，不能伪报干净停止。
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                async () => await kernel.DisposeAsync().AsTask().WaitAsync(Timeout));
         }
     }
 

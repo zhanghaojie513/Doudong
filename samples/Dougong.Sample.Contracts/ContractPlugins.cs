@@ -1,4 +1,5 @@
 using Dougong.Kernel;
+using Dougong.Sample.Shared;
 
 namespace Dougong.Sample.Contracts;
 
@@ -36,4 +37,38 @@ public sealed class CompatibleContractPlugin : IPlugin
 
     public ValueTask ActivateAsync(PluginContext context, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
+}
+
+/// <summary>清理必然失败，用于验证失败不得被当作成功卸载。</summary>
+public sealed class FailingCleanupPlugin : IPlugin
+{
+    public PluginManifest Manifest { get; } = PluginManifest.Create("dougong.sample.failing-cleanup", "1.0.0");
+
+    public ValueTask ActivateAsync(PluginContext context, CancellationToken cancellationToken)
+    {
+        context.RegisterForCleanup(_ => throw new InvalidOperationException("cleanup failure"));
+        return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>
+/// 使用共享契约程序集注册服务并订阅/发布事件，验证跨 ALC 类型同一性。
+/// </summary>
+public sealed class SharedContractPlugin : IPlugin
+{
+    public PluginManifest Manifest { get; } = PluginManifest.Create(
+        "dougong.sample.shared", "1.0.0");
+
+    public ValueTask ActivateAsync(PluginContext context, CancellationToken cancellationToken)
+    {
+        context.Services.Register<IGreetingService>(new GreetingService());
+        context.Events.Subscribe<GreetingEvent>(GreetingProbe.Report);
+        context.Events.Publish(new GreetingEvent("hello-from-plugin"));
+        return ValueTask.CompletedTask;
+    }
+
+    private sealed class GreetingService : IGreetingService
+    {
+        public string Greet(string name) => $"hello, {name}";
+    }
 }

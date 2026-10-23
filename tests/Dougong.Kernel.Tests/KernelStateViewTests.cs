@@ -28,6 +28,7 @@ public sealed class KernelStateViewTests
         {
             await foreach (var delta in view.Changes)
             {
+                if (delta.Kind != StateDeltaKind.StateChange) continue;
                 deltas.Add(delta);
                 if (deltas.Count >= 2) break;
             }
@@ -38,8 +39,8 @@ public sealed class KernelStateViewTests
 
         Assert.Equal(2, deltas.Count);
         Assert.All(deltas, d => Assert.False(d.ResyncRequired));
-        Assert.Equal(view.Revision + 1, deltas[0].Revision);
-        Assert.Equal(view.Revision + 2, deltas[1].Revision);
+        Assert.Equal(view.Revision + 2, deltas[0].Revision);
+        Assert.Equal(view.Revision + 3, deltas[1].Revision);
         Assert.All(deltas, d => Assert.NotNull(d.Change));
     }
 
@@ -57,6 +58,7 @@ public sealed class KernelStateViewTests
         {
             await foreach (var delta in view.Changes)
             {
+                if (delta.Kind != StateDeltaKind.StateChange) continue;
                 if (delta.Change?.PluginId.Value == "test.b") first.TrySetResult(delta);
                 if (first.Task.IsCompleted) break;
             }
@@ -103,8 +105,8 @@ public sealed class KernelStateViewTests
 
         await sawResync.Task.WaitAsync(Timeout);
         await completed.Task.WaitAsync(Timeout);
-        Assert.NotNull(kernel.LastObserverError);
-        Assert.Contains("队列已满", kernel.LastObserverError!.Message);
+        Assert.NotNull(kernel.LastObserverDiagnostic);
+        Assert.Contains("队列已满", kernel.LastObserverDiagnostic!.Message);
     }
 
     [Fact]
@@ -125,7 +127,10 @@ public sealed class KernelStateViewTests
         await kernel.RegisterAsync(() => new SimplePlugin("test.a"));
         await reader.WaitAsync(Timeout);
 
-        Assert.All(deltas, d => Assert.Equal(d.Change!.PluginId, d.Partition));
+        Assert.All(deltas, d => Assert.Equal("test.a", d.Partition!.Value.Value));
+        Assert.Equal(
+            new[] { StateDeltaKind.Registered, StateDeltaKind.StateChange },
+            deltas.Select(d => d.Kind).ToArray());
 
         // 同一分区内修订号严格递增。
         foreach (var group in deltas.GroupBy(d => d.Partition))
@@ -154,14 +159,17 @@ public sealed class KernelStateViewTests
         await foreach (var delta in resumed.Changes)
         {
             replay.Add(delta);
-            if (replay.Count >= 4) break;
+            if (replay.Count >= 6) break;
         }
 
-        Assert.Equal(4, replay.Count);
+        Assert.Equal(6, replay.Count);
         Assert.Equal(start + 1, replay[0].Revision);
-        Assert.Equal(start + 4, replay[^1].Revision);
-        Assert.Contains(replay, d => d.Change!.PluginId.Value == "test.a");
-        Assert.Contains(replay, d => d.Change!.PluginId.Value == "test.b");
+        Assert.Equal(start + 6, replay[^1].Revision);
+        Assert.Equal(replay.Select(d => d.Revision), replay.Select(d => d.Revision).Order());
+        Assert.Contains(replay, d => d.Partition?.Value == "test.a");
+        Assert.Contains(replay, d => d.Partition?.Value == "test.b");
+        Assert.Equal(StateDeltaKind.Registered, replay[0].Kind);
+        Assert.Equal(PluginState.Active, replay[^1].Change!.To);
     }
 
     [Fact]

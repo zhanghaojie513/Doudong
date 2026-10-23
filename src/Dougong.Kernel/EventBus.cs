@@ -8,8 +8,10 @@ internal sealed class EventBus : IEventBus, IAsyncDisposable
 {
     private readonly object _sync = new();
     private readonly Dictionary<Type, List<ISubscription>> _handlers = [];
+    private readonly List<Task> _pendingPumps = [];
     private readonly Action<Exception> _onHandlerError;
     private readonly int _capacity;
+    private bool _closed;
 
     public EventBus(Action<Exception> onHandlerError, int capacity = 256)
     {
@@ -22,8 +24,10 @@ internal sealed class EventBus : IEventBus, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(handler);
         var subscription = new EventSubscription<TEvent>(handler, _capacity, _onHandlerError);
+        subscription.SetDisposer(() => Remove(subscription));
         lock (_sync)
         {
+            ObjectDisposedException.ThrowIf(_closed, this);
             if (!_handlers.TryGetValue(typeof(TEvent), out var list))
             {
                 list = [];
@@ -41,6 +45,7 @@ internal sealed class EventBus : IEventBus, IAsyncDisposable
         ISubscription[] snapshot;
         lock (_sync)
         {
+            ObjectDisposedException.ThrowIf(_closed, this);
             if (!_handlers.TryGetValue(typeof(TEvent), out var list) || list.Count == 0) return;
             snapshot = [.. list];
         }
@@ -48,12 +53,16 @@ internal sealed class EventBus : IEventBus, IAsyncDisposable
         List<ISubscription>? overflowed = null;
         foreach (var subscription in snapshot)
         {
-            if (!subscription.TryPublish(evt)) (overflowed ??= []).Add(subscription);
+            if (subscription.IsClosed) continue;
+            if (!subscription.TryPublish(evt) && !subscription.IsClosed) (overflowed ??= []).Add(subscription);
         }
 
         if (overflowed is null) return;
         foreach (var subscription in overflowed)
         {
+            // 并发发布可能同时观察到同一个已满队列；每个订阅只报告一次。
+            if (subscription is not EventSubscriptionMarker marker || !marker.TryBeginOverflow())
+                continue;
             _onHandlerError(new InvalidOperationException(
                 $"事件订阅队列已满（容量 {_capacity}），订阅被断开；订阅方需要重新获取快照。"));
             Remove(subscription);
@@ -62,28 +71,37 @@ internal sealed class EventBus : IEventBus, IAsyncDisposable
 
     private void Remove(ISubscription subscription)
     {
+        bool removed;
         lock (_sync)
         {
-            if (!_handlers.TryGetValue(subscription.EventType, out var list)) return;
-            list.Remove(subscription);
-            if (list.Count == 0) _handlers.Remove(subscription.EventType);
+            removed = _handlers.TryGetValue(subscription.EventType, out var list)
+                && list.Remove(subscription);
+            if (removed && list!.Count == 0) _handlers.Remove(subscription.EventType);
         }
 
-        subscription.Dispose();
+        if (!removed && subscription.IsClosed) return;
+        // 退订立即从索引移除；仍可能正在执行的 pump 由 Drain 等待完成。
+        var closing = subscription.CloseAsync();
+        lock (_sync) { _pendingPumps.Add(closing); }
     }
 
     /// <summary>停止所有订阅并等待已入队事件处理完毕。</summary>
     public async Task DrainAsync()
     {
         ISubscription[] snapshot;
+        Task[] pending;
         lock (_sync)
         {
+            if (_closed) return;
+            _closed = true;
             snapshot = [.. _handlers.Values.SelectMany(list => list)];
             _handlers.Clear();
+            pending = [.. _pendingPumps];
+            _pendingPumps.Clear();
         }
 
-        foreach (var subscription in snapshot) subscription.Dispose();
         await Task.WhenAll(snapshot.Select(s => s.CloseAsync())).ConfigureAwait(false);
+        await Task.WhenAll(pending).ConfigureAwait(false);
     }
 
     public ValueTask DisposeAsync() => new(DrainAsync());
@@ -91,7 +109,13 @@ internal sealed class EventBus : IEventBus, IAsyncDisposable
     internal interface ISubscription : IDisposable, IAsyncDisposable
     {
         Type EventType { get; }
+        bool IsClosed { get; }
         bool TryPublish(object? evt);
         Task CloseAsync();
+    }
+
+    internal interface EventSubscriptionMarker
+    {
+        bool TryBeginOverflow();
     }
 }

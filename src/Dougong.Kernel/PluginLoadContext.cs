@@ -15,7 +15,17 @@ internal sealed class PluginLoadContext : AssemblyLoadContext
         "Dougong.Kernel",
     };
 
+    /// <summary>宿主显式声明共享的额外契约程序集；不会默认共享插件私有依赖。</summary>
+    private static readonly HashSet<string> HostSharedAssemblies = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly AssemblyDependencyResolver _resolver;
+
+    /// <summary>登记宿主与插件共享的契约程序集名，须在加载插件前调用。</summary>
+    public static void RegisterSharedContract(Assembly assembly)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+        if (assembly.GetName().Name is { } name) HostSharedAssemblies.Add(name);
+    }
 
     public PluginLoadContext(string assemblyPath)
         : base($"Dougong.Plugin:{Path.GetFileNameWithoutExtension(assemblyPath)}:{Guid.NewGuid():N}",
@@ -26,10 +36,12 @@ internal sealed class PluginLoadContext : AssemblyLoadContext
 
     protected override Assembly? Load(AssemblyName assemblyName)
     {
-        if (assemblyName.Name is { } name && SharedContracts.Contains(name))
+        if (assemblyName.Name is { } name
+            && (SharedContracts.Contains(name) || HostSharedAssemblies.Contains(name)))
         {
-            // 返回 null 让默认上下文提供宿主已加载的实例。
-            return null;
+            // 先返回宿主已加载的实例，避免同一契约在不同 ALC 中各有一份。
+            return AppDomain.CurrentDomain.GetAssemblies()
+                .FirstOrDefault(a => string.Equals(a.GetName().Name, name, StringComparison.OrdinalIgnoreCase));
         }
 
         var path = _resolver.ResolveAssemblyToPath(assemblyName);

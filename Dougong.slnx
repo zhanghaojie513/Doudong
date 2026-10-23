@@ -8,4 +8,5 @@
   <Project Path="tests/Dougong.Kernel.Tests/Dougong.Kernel.Tests.csproj" />
   <Project Path="samples/Dougong.Sample.Plugin/Dougong.Sample.Plugin.csproj" />
   <Project Path="samples/Dougong.Sample.Contracts/Dougong.Sample.Contracts.csproj" />
+  <Project Path="samples/Dougong.Sample.Shared/Dougong.Sample.Shared.csproj" />
 </Solution>

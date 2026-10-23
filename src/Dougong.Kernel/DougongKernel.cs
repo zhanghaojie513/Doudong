@@ -38,6 +38,18 @@ internal sealed class ServiceTable
         }
     }
 
+    /// <summary>按提供方与代次查找已提交的单个服务实例；用于调用时重新校验，引用不长期捕获实例。</summary>
+    public ServiceEntry? Find(PluginId owner, long generation, Type serviceType, string? name)
+    {
+        lock (_sync)
+        {
+            if (!_entries.TryGetValue(new ServiceKey(serviceType, name), out var list)) return null;
+            foreach (var entry in list)
+                if (entry.Owner == owner && entry.Generation == generation) return entry;
+            return null;
+        }
+    }
+
     public void RemoveOwner(PluginId owner, long generation)
     {
         lock (_sync)
@@ -118,6 +130,9 @@ internal sealed class PluginEntry
     public bool DesiredActive { get; set; }
     public bool CleanupFailed { get; set; }
     public bool DrainTimedOut { get; set; }
+    public string? IsolationReason { get; set; }
+    public bool Unloading { get; set; }
+    public Task? UnloadTask { get; set; }
     public long ActivationSequence { get; set; }
     public long Generation { get; set; }
     public PluginContext? Context { get; set; }
@@ -141,9 +156,20 @@ public sealed partial class DougongKernel : IAsyncDisposable
     private long _revision;
 
     /// <summary>保留的增量条数，供游标续订回放；超出后旧游标必须重取快照。</summary>
-    public int RevisionHistoryLimit { get; set; } = 1024;
+    public int RevisionHistoryLimit
+    {
+        get => _revisionHistoryLimit;
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            _revisionHistoryLimit = value;
+        }
+    }
+
+    private int _revisionHistoryLimit = 1024;
     private readonly EventBus _events;
     private readonly AsyncLocal<CallbackScope?> _callback = new();
+    private readonly AsyncLocal<PluginContext?> _activationScope = new();
     private bool _disposed;
     private Task? _disposeTask;
     private long _activationSequence;
@@ -164,10 +190,14 @@ public sealed partial class DougongKernel : IAsyncDisposable
         };
 
     /// <summary>等待受影响批次在途调用结束的预算；超时后不执行清理并保留诊断。</summary>
-    public TimeSpan DrainTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    private TimeSpan _drainTimeout = TimeSpan.FromSeconds(30);
+    public TimeSpan DrainTimeout { get => _drainTimeout; set => _drainTimeout = ValidateBudget(value); }
 
-    /// <summary>最近一次被隔离的观察者/事件处理器异常，供宿主记录诊断。</summary>
-    public Exception? LastObserverError { get; private set; }
+    /// <summary>
+    /// 最近一次被隔离的观察者/事件处理器/状态订阅诊断。只保留异常类型名与消息，
+    /// 不持有插件 ALC 的异常对象。
+    /// </summary>
+    public PluginDiagnostic? LastObserverDiagnostic { get; private set; }
 
     public IDisposable SubscribeStateChanges(Action<PluginStateChange> observer)
     {
@@ -251,22 +281,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(factory);
         cancellationToken.ThrowIfCancellationRequested();
         var manifest = factory()?.Manifest ?? throw new InvalidOperationException("插件工厂返回 null。");
-        lock (_sync)
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_entries.ContainsKey(manifest.Id))
-                throw new InvalidOperationException($"插件 '{manifest.Id}' 已登记。");
-            if (FindDependencyCycle(manifest.Id, manifest) is { } cycle)
-                throw new InvalidOperationException(
-                    $"插件依赖成环：{string.Join(" -> ", cycle)}。");
-            _entries.Add(manifest.Id, new PluginEntry
-            {
-                Id = manifest.Id, Manifest = manifest, Factory = factory, DesiredActive = true,
-            });
-        }
-
-        await EvaluateAsync(cancellationToken).ConfigureAwait(false);
-        return GetHandle(manifest.Id);
+        return await RegisterCoreAsync(factory, manifest, null, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<PluginHandle> ActivateAsync(PluginId id, CancellationToken cancellationToken = default)
@@ -278,8 +293,9 @@ public sealed partial class DougongKernel : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var entry = RequireEntry(id);
-            if (entry.CleanupFailed)
-                throw new InvalidOperationException($"插件 '{id}' 清理失败，不能再次激活。");
+            if (entry.Unloading)
+                throw new InvalidOperationException($"插件 '{id}' 正在卸载，不能激活。");
+            EnsureReusable(entry);
             entry.DesiredActive = true;
             if (entry.State == PluginState.Failed)
                 SetState(entry, changes, PluginState.Stopped, "宿主显式请求重试。");
@@ -305,6 +321,11 @@ public sealed partial class DougongKernel : IAsyncDisposable
             if (expectedContext is not null && !ReferenceEquals(entry.Context, expectedContext))
                 return ToHandle(entry);
             ObjectDisposedException.ThrowIf(_disposed && expectedContext is null, this);
+            if (entry.IsolationReason is not null || entry.DrainTimedOut)
+            {
+                entry.DesiredActive = false;
+                return ToHandle(entry);
+            }
             entry.DesiredActive = false;
             WithdrawServices(entry);
             if (entry.Context is { } context)
@@ -334,9 +355,25 @@ public sealed partial class DougongKernel : IAsyncDisposable
         PublishChanges(changes);
 
         // 取消不能等待重评估许可：正在激活的回调可能正等待寿命令牌取消。
-        await Task.WhenAll(contexts.Select(RequestStopQuietlyAsync)).ConfigureAwait(false);
+        var cancellation = Task.WhenAll(contexts.Select(RequestStopQuietlyAsync));
+        try
+        {
+            await WithinBudgetAsync(cancellation, CancellationTimeout, "cancellation").ConfigureAwait(false);
+        }
+        catch (LifecycleTimeoutException ex)
+        {
+            foreach (var context in contexts) IsolateContext(context, ex);
+            return GetHandle(id);
+        }
+
         await EvaluateAsync(CancellationToken.None).ConfigureAwait(false);
         return GetHandle(id);
+    }
+
+    private void IsolateContext(PluginContext context, Exception error)
+    {
+        if (_entries.TryGetValue(context.PluginId, out var entry))
+            Isolate(entry, context, error.Message, error);
     }
 
     private async ValueTask EvaluateAsync(CancellationToken cancellationToken)
@@ -355,7 +392,8 @@ public sealed partial class DougongKernel : IAsyncDisposable
                     var stopNeeded = false;
                     foreach (var entry in _entries.Values)
                     {
-                        if (entry.Context is null || entry.DrainTimedOut) continue;
+                        if (entry.Context is null || entry.DrainTimedOut
+                            || entry.IsolationReason is not null) continue;
                         var missing = MissingRequirements(entry);
                         if (entry.DesiredActive && !entry.Context.IsClosed
                             && !entry.Context.Invocations.IsClosed
@@ -372,7 +410,8 @@ public sealed partial class DougongKernel : IAsyncDisposable
                     {
                         foreach (var entry in _entries.Values)
                         {
-                            if (entry.Context is not null || entry.State == PluginState.Failed) continue;
+                            if (entry.Context is not null || entry.State == PluginState.Failed
+                                || entry.IsolationReason is not null) continue;
                             if (!entry.DesiredActive)
                             {
                                 if (entry.State != PluginState.Stopped)
@@ -390,7 +429,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
                             entry.PendingServices.Clear();
                             entry.Generation++;
                             entry.ActivationSequence = ++_activationSequence;
-                            var events = new ScopedEventBus(_events);
+                            var events = new ScopedEventBus(_events, () => EnterCallback(context));
                             context = new PluginContext(entry.Id,
                                 new ScopedRegistry(this, entry.Id, entry.Generation),
                                 new ServiceResolver(this, entry.Id, entry.Generation), events, events,
@@ -412,24 +451,49 @@ public sealed partial class DougongKernel : IAsyncDisposable
                 }
 
                 if (selected is null) return;
-                await RunActivationAsync(selected, context!).ConfigureAwait(false);
+                await RunActivationAsync(selected, context!, cancellationToken).ConfigureAwait(false);
             }
         }
         finally { _reconcile.Release(); }
     }
 
-    private async ValueTask RunActivationAsync(PluginEntry entry, PluginContext context)
+    private async ValueTask RunActivationAsync(PluginEntry entry, PluginContext context, CancellationToken cancellationToken)
     {
         var generation = entry.Generation;
         Exception? activationError = null;
-        using (EnterCallback(context))
+        Exception? activationTimeout = null;
+        var callerCancelled = false;
+        Task? activationTask = null;
+        try
         {
-            try
+            activationTask = RunActivationCallbackAsync(entry, context);
+            if (ActivationTimeout == Timeout.InfiniteTimeSpan)
             {
-                var plugin = entry.Factory();
-                await plugin.ActivateAsync(context, context.Lifetime).ConfigureAwait(false);
+                await activationTask.ConfigureAwait(false);
             }
-            catch (Exception ex) { activationError = ex; }
+            else
+            {
+                await activationTask.WaitAsync(ActivationTimeout, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // 调用方取消：停止本次激活代次并回滚，不再提交。
+            activationError = new OperationCanceledException(cancellationToken);
+            callerCancelled = true;
+        }
+        catch (TimeoutException ex)
+        {
+            activationTimeout = ex;
+            // 后台任务仍可能运行；观察其最终异常，避免未观察任务异常，但不等它。
+            _ = activationTask!.ContinueWith(
+                static t => { _ = t.Exception; }, CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+        catch (Exception ex)
+        {
+            activationError = ex;
         }
 
         List<PluginStateChange> changes = [];
@@ -437,9 +501,10 @@ public sealed partial class DougongKernel : IAsyncDisposable
         bool stopped;
         lock (_sync)
         {
-            stopped = _disposed || !entry.DesiredActive || context.IsClosed
+            stopped = _disposed || !entry.DesiredActive || context.IsClosed || callerCancelled
                 || entry.State == PluginState.Deactivating || MissingRequirements(entry).Count > 0;
-            accepted = activationError is null && !stopped && entry.Generation == generation
+            accepted = activationError is null && activationTimeout is null && !stopped
+                && entry.Generation == generation
                 && ReferenceEquals(entry.Context, context) && entry.State == PluginState.Activating;
             if (accepted)
             {
@@ -456,56 +521,96 @@ public sealed partial class DougongKernel : IAsyncDisposable
         PublishChanges(changes);
         if (accepted) return;
 
+        // 激活超时：回调可能仍在运行插件代码，只能隔离，不能清理后重用。
+        if (activationTimeout is not null)
+        {
+            Isolate(entry, context,
+                $"激活未在 {ActivationTimeout} 内结束且未响应取消；该代次已隔离，需重启宿主。",
+                new LifecycleTimeoutException("activation", activationTimeout));
+            return;
+        }
+
         await RequestStopQuietlyAsync(context).ConfigureAwait(false);
         try
         {
-            await context.Invocations.WhenDrained.WaitAsync(DrainTimeout).ConfigureAwait(false);
+            await WithinBudgetAsync(context.Invocations.WhenDrained, DrainTimeout, "drain").ConfigureAwait(false);
+            await WithinBudgetAsync(context.DrainEventsAsync(), EventDrainTimeout, "events").ConfigureAwait(false);
         }
-        catch (TimeoutException)
+        catch (LifecycleTimeoutException ex)
         {
-            lock (_sync)
-            {
-                if (ReferenceEquals(entry.Context, context))
-                {
-                    entry.DrainTimedOut = true;
-                    SetState(entry, changes, PluginState.Failed,
-                        $"激活回滚时服务调用未在 {DrainTimeout} 内结束；不执行清理，需重启宿主。",
-                        new TimeoutException("激活回滚排空超时。"));
-                }
-            }
-            PublishChanges(changes);
+            Isolate(entry, context, ex.Message, ex);
             return;
         }
+
         var cleanupError = await DisposeContextAsync(context).ConfigureAwait(false);
+        if (cleanupError is LifecycleTimeoutException)
+        {
+            // 清理回调仍可能运行，不能视为已释放；保留隔离，禁止复用与卸载。
+            Isolate(entry, context,
+                "清理未在预算内结束；该代次已隔离，需重启宿主。", cleanupError);
+            return;
+        }
+
         changes = [];
         lock (_sync)
         {
             if (entry.Generation != generation || !ReferenceEquals(entry.Context, context)) return;
             entry.Context = null;
+            // 调用方取消表示本次启用请求已撤回；不能在同一评估循环里自动重试。
+            if (callerCancelled) entry.DesiredActive = false;
             entry.CleanupFailed = cleanupError is not null;
             Exception? error = activationError is not null && cleanupError is not null
                 ? new AggregateException(activationError, cleanupError) : activationError ?? cleanupError;
-            SetState(entry, changes, cleanupError is not null || (!stopped && activationError is not null)
+            SetState(entry, changes, cleanupError is not null || (!stopped && (activationError is not null || activationTimeout is not null))
                 ? PluginState.Failed : PluginState.Stopped,
                 error is null ? "已停止。" : "激活未提交；注册已撤销。", error);
         }
         PublishChanges(changes);
+        if (callerCancelled) throw new OperationCanceledException(cancellationToken);
     }
 
-    private async ValueTask StopAsync(PluginEntry entry, PluginContext context)
+    private async Task RunActivationCallbackAsync(PluginEntry entry, PluginContext context)
+    {
+        // 裸解析窗口只对这次激活回调的异步流开放，不能凭条目状态从任意任务借用。
+        var previousScope = _activationScope.Value;
+        _activationScope.Value = context;
+        try
+        {
+            using (EnterCallback(context))
+            {
+                var plugin = entry.Factory();
+                await plugin.ActivateAsync(context, context.Lifetime).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _activationScope.Value = previousScope;
+        }
+    }
+
+    private async ValueTask<LifecycleTimeoutException?> StopAsync(PluginEntry entry, PluginContext context)
     {
         var generation = entry.Generation;
         var error = await DisposeContextAsync(context).ConfigureAwait(false);
+        if (error is LifecycleTimeoutException timeout)
+        {
+            Isolate(entry, context,
+                "清理未在预算内结束；该代次已隔离，需重启宿主。", error);
+            return timeout;
+        }
+
         List<PluginStateChange> changes = [];
         lock (_sync)
         {
-            if (entry.Generation != generation || !ReferenceEquals(entry.Context, context)) return;
+            if (entry.Generation != generation || !ReferenceEquals(entry.Context, context)) return null;
             entry.Context = null;
             entry.CleanupFailed = error is not null;
+            if (error is null) ForgetDependencies(entry.Id, generation);
             SetState(entry, changes, error is null ? PluginState.Stopped : PluginState.Failed,
                 error is null ? "已停止。" : "清理失败，不能再次激活。", error);
         }
         PublishChanges(changes);
+        return null;
     }
 
     private async Task RequestStopQuietlyAsync(PluginContext context)
@@ -521,7 +626,19 @@ public sealed partial class DougongKernel : IAsyncDisposable
     {
         using (EnterCallback(context))
         {
-            try { await context.CompleteDisposalAsync().ConfigureAwait(false); return null; }
+            try
+            {
+                await WithinBudgetAsync(context.CompleteDisposalAsync(), CleanupTimeout, "cleanup")
+                    .ConfigureAwait(false);
+                return null;
+            }
+            catch (LifecycleTimeoutException)
+            {
+                // 通知协作式清理退出；任务仍在后台完成，其异常由共享任务的观察器吞掉。
+                context.CancelCleanup();
+                return new LifecycleTimeoutException("cleanup",
+                    new TimeoutException("清理回调未在预算内结束。"));
+            }
             catch (Exception ex) { return ex; }
         }
     }
@@ -603,7 +720,8 @@ public sealed partial class DougongKernel : IAsyncDisposable
         _services.RemoveOwner(entry.Id, entry.Generation);
     }
 
-    internal IReadOnlyList<ServiceTable.ServiceEntry> FindServices(
+    /// <summary>返回匹配的提供方集合；不做优先级收缩，供 <c>ResolveAll</c> 与需求判断使用。</summary>
+    internal IReadOnlyList<ServiceTable.ServiceEntry> FindAllServices(
         PluginId owner, long generation, Type serviceType, string? name)
     {
         lock (_sync)
@@ -618,20 +736,41 @@ public sealed partial class DougongKernel : IAsyncDisposable
                     owner, generation, pending.Instance, pending.Priority)];
             }
 
-            // 消费方声明了 ProviderId 时，按该提供方过滤，避免同键多提供方被判为歧义。
+            // 消费方声明了 ProviderId 时，只保留该提供方。
             if (_entries.TryGetValue(owner, out var consumer)
                 && PreferredProvider(consumer, serviceType, name) is { } preferred)
             {
                 committed = [.. committed.Where(e => e.Owner == preferred)];
             }
 
-            // 未指定 ProviderId 时按优先级缩小到唯一最优提供方；并列则保持多值，由调用方判为歧义。
-            if (committed.Count > 1 && ServiceTable.SelectByPriority(committed) is { } best)
-            {
-                committed = [best];
-            }
-
             return committed;
+        }
+    }
+
+    /// <summary>选出唯一提供方；缺失或最高优先级并列时返回 null。</summary>
+    internal ServiceTable.ServiceEntry? SelectService(
+        PluginId owner, long generation, Type serviceType, string? name)
+    {
+        lock (_sync)
+        {
+            var committed = FindAllServices(owner, generation, serviceType, name);
+            var selected = ServiceTable.SelectByPriority(committed);
+            if (selected is not null)
+                RecordDependency(owner, generation, selected.Owner, selected.Generation);
+            return selected;
+        }
+    }
+
+    /// <summary>集合解析：返回全部匹配提供方，并记录每个实际暴露的依赖边。</summary>
+    internal IReadOnlyList<TService> ResolveAllForPlugin<TService>(PluginId owner, long generation, string? name)
+        where TService : class
+    {
+        lock (_sync)
+        {
+            var matches = FindAllServices(owner, generation, typeof(TService), name);
+            foreach (var match in matches)
+                RecordDependency(owner, generation, match.Owner, match.Generation);
+            return [.. matches.Select(e => (TService)e.Instance)];
         }
     }
 
@@ -672,52 +811,62 @@ public sealed partial class DougongKernel : IAsyncDisposable
         if (overflow > 0) _revisionHistory.RemoveRange(0, overflow);
     }
 
-    private static void SetState(PluginEntry entry, List<PluginStateChange> changes,
+    /// <summary>
+    /// 状态提交：修订号、历史与 live 入队在同一临界区完成，保证订阅端看到单调顺序。
+    /// 调用方须持有 <c>_sync</c>；用户观察者在锁外通知。
+    /// </summary>
+    private void SetState(PluginEntry entry, List<PluginStateChange> changes,
         PluginState to, string? reason, Exception? error = null)
     {
         var from = entry.State;
         entry.State = to;
-        changes.Add(new PluginStateChange(entry.Id, from, to, reason, error));
+        var change = new PluginStateChange(
+            entry.Id, from, to, reason,
+            error is null ? null : new PluginDiagnostic(error.GetType().Name, error.Message));
+        changes.Add(change);
+        CommitDelta(new StateDelta(++_revision, change, Partition: entry.Id));
     }
+
+    private void CommitDelta(StateDelta delta)
+    {
+        AppendHistory(delta);
+        // TryPublish 溢出时会从订阅表移除自身，必须遍历快照。
+        foreach (var subscription in _revisionSubscriptions.ToArray())
+            subscription.TryPublish(delta);
+    }
+
+    private void CommitRegistered(PluginEntry entry) =>
+        CommitDelta(new StateDelta(++_revision, null, Partition: entry.Id,
+            Kind: StateDeltaKind.Registered, State: entry.State));
+
+    private void CommitRemoved(PluginEntry entry) =>
+        CommitDelta(new StateDelta(++_revision, null, Partition: entry.Id,
+            Kind: StateDeltaKind.Removed, State: entry.State));
 
     private void PublishChanges(List<PluginStateChange> changes)
     {
         if (changes.Count == 0) return;
         Action<PluginStateChange>[] observers;
-        RevisionSubscription[] revisions;
-        List<StateDelta>? deltas = null;
         lock (_stateObservers) { observers = [.. _stateObservers]; }
-        lock (_sync)
-        {
-            revisions = [.. _revisionSubscriptions];
-            deltas = new List<StateDelta>(changes.Count);
-            foreach (var change in changes)
-            {
-                var delta = new StateDelta(++_revision, change, Partition: change.PluginId);
-                deltas.Add(delta);
-                AppendHistory(delta);
-            }
-        }
 
         using (EnterCallback())
         {
             foreach (var change in changes)
                 foreach (var observer in observers)
                     try { observer(change); }
-                    catch (Exception ex) { LastObserverError = ex; }
+                    catch (Exception ex) { LastObserverDiagnostic = ToDiagnostic(ex); }
         }
-
-        if (deltas is null || deltas.Count == 0) return;
-        foreach (var subscription in revisions)
-            foreach (var delta in deltas)
-                subscription.TryPublish(delta);
     }
 
-    private void OnEventHandlerError(Exception ex) => LastObserverError = ex;
+    private void OnEventHandlerError(Exception ex) => LastObserverDiagnostic = ToDiagnostic(ex);
+
+    /// <summary>把插件异常折叠为共享诊断，避免宿主长期持有插件 ALC 对象。</summary>
+    internal static PluginDiagnostic ToDiagnostic(Exception ex) =>
+        new(ex.GetType().Name, ex.Message);
 
     internal long MarkRevisionOverflow(RevisionSubscription subscription, string reason)
     {
-        LastObserverError = new InvalidOperationException(reason);
+        LastObserverDiagnostic = new PluginDiagnostic(nameof(InvalidOperationException), reason);
         lock (_sync) { return _revision; }
     }
 
@@ -778,13 +927,55 @@ public sealed partial class DougongKernel : IAsyncDisposable
     {
         try
         {
-            await Task.WhenAll(contexts.Select(RequestStopQuietlyAsync)).ConfigureAwait(false);
+            var cancellation = Task.WhenAll(contexts.Select(RequestStopQuietlyAsync));
+            try
+            {
+                await WithinBudgetAsync(cancellation, CancellationTimeout, "cancellation").ConfigureAwait(false);
+            }
+            catch (LifecycleTimeoutException ex)
+            {
+                IsolateAll(contexts, ex);
+                completion.SetException(ex);
+                return;
+            }
+
             await EvaluateAsync(CancellationToken.None).ConfigureAwait(false);
-            await _events.DrainAsync().ConfigureAwait(false);
-            completion.SetResult();
+            await WithinBudgetAsync(_events.DrainAsync(), EventDrainTimeout, "events").ConfigureAwait(false);
+
+            if (HasIsolatedContexts())
+                completion.SetException(new InvalidOperationException(
+                    "内核销毁结束，但存在未能干净停止的代次；需重启宿主。"));
+            else
+                completion.SetResult();
         }
         catch (Exception ex) { completion.SetException(ex); }
+        finally { CompleteRevisionSubscriptions(); }
     }
+
+    private void IsolateAll(PluginContext[] contexts, Exception error)
+    {
+        foreach (var context in contexts)
+        {
+            if (_entries.TryGetValue(context.PluginId, out var entry))
+                Isolate(entry, context, error.Message, error);
+        }
+    }
+
+    /// <summary>销毁时结束所有状态订阅，让读取方有界退出。</summary>
+    private void CompleteRevisionSubscriptions()
+    {
+        RevisionSubscription[] subscriptions;
+        lock (_sync)
+        {
+            subscriptions = [.. _revisionSubscriptions];
+            _revisionSubscriptions.Clear();
+        }
+
+        foreach (var subscription in subscriptions) subscription.Dispose();
+    }
+
+    private bool HasIsolatedContexts() => _entries.Values.Any(
+        e => e.IsolationReason is not null || e.DrainTimedOut || e.Context is not null);
 
     private sealed class StateSubscription(DougongKernel owner, Action<PluginStateChange> observer) : IDisposable
     {
@@ -806,13 +997,13 @@ public sealed partial class DougongKernel : IAsyncDisposable
         public TService? Resolve<TService>(string? name = null) where TService : class
         {
             kernel.EnsureActivationResolveAllowed(owner, generation);
-            var matches = kernel.FindServices(owner, generation, typeof(TService), name);
-            return matches.Count == 1 ? (TService)matches[0].Instance : null;
+            var selected = kernel.SelectService(owner, generation, typeof(TService), name);
+            return selected is null ? null : (TService)selected.Instance;
         }
         public IReadOnlyList<TService> ResolveAll<TService>(string? name = null) where TService : class
         {
             kernel.EnsureActivationResolveAllowed(owner, generation);
-            return [.. kernel.FindServices(owner, generation, typeof(TService), name).Select(e => (TService)e.Instance)];
+            return kernel.ResolveAllForPlugin<TService>(owner, generation, name);
         }
     }
 }

@@ -107,14 +107,14 @@ public sealed class KernelM0AcceptanceTests
     }
 
     [Fact]
-    public async Task Cross_alc_event_type_identity_is_preserved()
+    public async Task Cross_alc_manifest_uses_host_plugin_id_type()
     {
         await using var kernel = new DougongKernel();
         var sample = SampleAssemblyPath();
         var handle = await kernel.LoadAsync(sample, "Dougong.Sample.Plugin.SamplePlugin")
             .AsTask().WaitAsync(Timeout);
 
-        // 插件在自己的 ALC 中引用 Dougong.Kernel；事件类型必须与宿主是同一实例。
+        // 插件在自己的 ALC 中引用 Dougong.Kernel；清单中的 PluginId 必须与宿主是同一类型。
         var loadedAssembly = kernel.GetLoadedAssembly(handle.Id)!;
         Assert.NotSame(typeof(PluginId).Assembly, loadedAssembly);
         var pluginType = loadedAssembly.GetType("Dougong.Sample.Plugin.SamplePlugin")!;
@@ -127,14 +127,15 @@ public sealed class KernelM0AcceptanceTests
     }
 
     [Fact]
-    public async Task Cross_alc_service_contract_type_identity_is_preserved()
+    public async Task Plugin_owned_service_contract_stays_private_to_its_alc()
     {
         await using var kernel = new DougongKernel();
         var handle = await kernel.LoadAsync(
             SampleAssemblyPath(), "Dougong.Sample.Plugin.SamplePlugin")
             .AsTask().WaitAsync(Timeout);
 
-        // 服务接口定义在插件程序集内；宿主只能通过插件自己的 Type 句柄访问。
+        // 服务接口定义在插件程序集内：宿主只能通过插件自己的 Type 句柄访问。
+        // 这不是共享契约验收；宿主/插件共享契约见 KernelCrossAlcAcceptanceTests。
         var serviceType = kernel.GetLoadedAssembly(handle.Id)!
             .GetType("Dougong.Sample.Plugin.ISampleService")!;
         Assert.NotSame(typeof(PluginId).Assembly, serviceType.Assembly);

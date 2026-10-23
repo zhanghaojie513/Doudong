@@ -194,8 +194,8 @@ public sealed class KernelDependencyTests
 
         Assert.Equal(0, received);
 
-        // 事件总线在插件作用域外不可达，这里用插件内部计数确认其订阅已随作用域释放。
-        plugin.PublishAfterDispose();
+        // 事件总线在插件作用域外不可达，这里确认旧代次作用域已封口。
+        Assert.Throws<ObjectDisposedException>(() => plugin.PublishAfterDispose());
 
         Assert.Equal(0, plugin.ReceivedAfterPublish);
     }
@@ -388,6 +388,6 @@ public sealed class KernelDependencyTests
         await kernel.RegisterAsync(() => new StoragePlugin("A"));
 
         Assert.Contains(PluginState.Active, seen);
-        Assert.NotNull(kernel.LastObserverError);
+        Assert.NotNull(kernel.LastObserverDiagnostic);
     }
 }

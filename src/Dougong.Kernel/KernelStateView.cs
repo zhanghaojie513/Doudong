@@ -48,4 +48,6 @@ public sealed record StateDelta(
     long Revision,
     PluginStateChange? Change,
     bool ResyncRequired = false,
-    PluginId? Partition = null);
+    PluginId? Partition = null,
+    StateDeltaKind Kind = StateDeltaKind.StateChange,
+    PluginState? State = null);

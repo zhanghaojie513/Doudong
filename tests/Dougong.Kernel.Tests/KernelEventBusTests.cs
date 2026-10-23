@@ -69,8 +69,10 @@ public sealed class KernelEventBusTests
 
         plugin.Context!.Events.Publish(1);
         await second.Task.WaitAsync(Timeout);
+        // 两个订阅各有独立泵，成功处理器先完成不代表失败处理器已上报。
+        await WaitUntilAsync(() => kernel.LastObserverDiagnostic is not null);
 
-        Assert.NotNull(kernel.LastObserverError);
+        Assert.NotNull(kernel.LastObserverDiagnostic);
     }
 
     [Fact]
@@ -84,8 +86,8 @@ public sealed class KernelEventBusTests
         await WaitUntilAsync(() => Volatile.Read(ref received) == 1);
 
         await kernel.DeactivateAsync(plugin.Manifest.Id);
-        // 停用会退订并排空；排空完成后再发布才可确认订阅确已移除。
-        plugin.Context!.Events.Publish(2);
+        // 停用会退订并排空；旧代次不得再把事件送进总线。
+        Assert.Throws<ObjectDisposedException>(() => plugin.Context!.Events.Publish(2));
         await Task.Delay(150);
 
         Assert.Equal(1, Volatile.Read(ref received));
@@ -108,8 +110,8 @@ public sealed class KernelEventBusTests
         await slowStarted.Task.WaitAsync(Timeout);
         for (var i = 0; i < 600; i++) plugin.Context!.Events.Publish(i);
 
-        await WaitUntilAsync(() => kernel.LastObserverError is not null);
-        Assert.Contains("队列已满", kernel.LastObserverError!.Message);
+        await WaitUntilAsync(() => kernel.LastObserverDiagnostic is not null);
+        Assert.Contains("队列已满", kernel.LastObserverDiagnostic!.Message);
 
         var afterOverflow = 0;
         using var fresh = plugin.Context!.Events.Subscribe<int>(_ => Interlocked.Increment(ref afterOverflow));

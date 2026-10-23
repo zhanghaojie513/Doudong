@@ -28,10 +28,10 @@ public enum PluginState
     Failed
 }
 
-/// <summary>一次状态迁移的记录。</summary>
+/// <summary>一次状态迁移的记录。诊断只保留共享字符串数据，不持有插件异常对象。</summary>
 public sealed record PluginStateChange(
     PluginId PluginId,
     PluginState From,
     PluginState To,
     string? Reason = null,
-    Exception? Error = null);
+    PluginDiagnostic? Diagnostic = null);

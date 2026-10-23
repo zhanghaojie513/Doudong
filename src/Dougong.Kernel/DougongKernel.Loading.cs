@@ -47,29 +47,52 @@ public sealed partial class DougongKernel
     {
         EnsureLifecycleCallAllowed();
         cancellationToken.ThrowIfCancellationRequested();
-        LoadedPlugin? loaded;
+        LoadedPlugin loaded;
+        long generation;
         lock (_sync)
         {
-            if (!_entries.TryGetValue(id, out var entry))
-                throw new KeyNotFoundException($"插件 '{id}' 未登记。");
-            loaded = entry.Loaded;
-            if (loaded is null)
-                throw new InvalidOperationException($"插件 '{id}' 不是动态加载的，不能卸载。");
-            if (entry.CleanupFailed || entry.DrainTimedOut)
-                throw new InvalidOperationException(
-                    $"插件 '{id}' 未能干净停止，拒绝卸载以免留下未释放资源。");
+            var entry = RequireEntry(id);
+            loaded = entry.Loaded
+                ?? throw new InvalidOperationException($"插件 '{id}' 不是动态加载的，不能卸载。");
+            EnsureReusable(entry);
+            if (entry.Unloading)
+                throw new InvalidOperationException($"插件 '{id}' 正在卸载。");
+            entry.Unloading = true;
+            entry.DesiredActive = false;
+            generation = entry.Generation;
         }
 
-        await DeactivateGenerationAsync(id, null, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await DeactivateGenerationAsync(id, null, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            lock (_sync)
+            {
+                if (_entries.TryGetValue(id, out var entry)) entry.Unloading = false;
+            }
+            throw;
+        }
 
         lock (_sync)
         {
             if (!_entries.TryGetValue(id, out var entry)) return;
-            if (entry.State is not (PluginState.Stopped or PluginState.Failed)) return;
+            // 停用过程新产生的失败或超时同样阻止卸载。
+            if (entry.Generation != generation || !ReferenceEquals(entry.Loaded, loaded)
+                || entry.State != PluginState.Stopped || entry.Context is not null
+                || entry.CleanupFailed || entry.DrainTimedOut || entry.IsolationReason is not null)
+            {
+                entry.Unloading = false;
+                throw new InvalidOperationException(
+                    $"插件 '{id}' 未能干净停止（{entry.State}），拒绝卸载以免留下未释放资源。");
+            }
 
             entry.PendingServices.Clear();
             _services.RemoveOwner(id, entry.Generation);
+            ForgetDependencies(id, entry.Generation);
             _entries.Remove(id);
+            CommitRemoved(entry);
         }
 
         loaded.Detach();
@@ -89,15 +112,45 @@ public sealed partial class DougongKernel
             if (FindDependencyCycle(manifest.Id, manifest) is { } cycle)
                 throw new InvalidOperationException(
                     $"插件依赖成环：{string.Join(" -> ", cycle)}。");
-            _entries.Add(manifest.Id, new PluginEntry
+            var entry = new PluginEntry
             {
                 Id = manifest.Id, Manifest = manifest, Factory = factory,
                 DesiredActive = true, Loaded = loaded,
-            });
+            };
+            _entries.Add(manifest.Id, entry);
+            CommitRegistered(entry);
         }
 
-        await EvaluateAsync(cancellationToken).ConfigureAwait(false);
-        return GetHandle(manifest.Id);
+        try
+        {
+            await EvaluateAsync(cancellationToken).ConfigureAwait(false);
+            return GetHandle(manifest.Id);
+        }
+        catch
+        {
+            // 登记已提交但评估失败：撤销本次条目的启用意图，并按身份回滚。
+            bool remove = false;
+            lock (_sync)
+            {
+                remove = _entries.TryGetValue(manifest.Id, out var entry)
+                    && ReferenceEquals(entry.Loaded, loaded)
+                    && entry.State is PluginState.Registered or PluginState.Blocked
+                    && entry.Context is null;
+                if (remove)
+                {
+                    _entries.Remove(manifest.Id);
+                    ForgetDependencies(manifest.Id, 0);
+                    CommitRemoved(entry!);
+                }
+                else if (_entries.TryGetValue(manifest.Id, out var retained))
+                {
+                    retained.DesiredActive = false;
+                }
+            }
+
+            if (remove) loaded?.Detach();
+            throw;
+        }
     }
 
     private static Type FindPluginType(Assembly assembly, string? typeName)
@@ -200,7 +253,8 @@ public sealed partial class DougongKernel
             if (_entries.TryGetValue(owner, out var entry)
                 && entry.Generation == generation
                 && entry.State == PluginState.Activating
-                && entry.Context is { IsClosed: false })
+                && entry.Context is { IsClosed: false }
+                && ReferenceEquals(_activationScope.Value, entry.Context))
             {
                 return;
             }
