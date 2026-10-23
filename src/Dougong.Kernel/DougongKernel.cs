@@ -68,6 +68,8 @@ internal sealed class PluginEntry
     public PluginState State { get; set; } = PluginState.Registered;
     public bool DesiredActive { get; set; }
     public bool CleanupFailed { get; set; }
+    public bool DrainTimedOut { get; set; }
+    public long ActivationSequence { get; set; }
     public long Generation { get; set; }
     public PluginContext? Context { get; set; }
     public Dictionary<ServiceKey, object> PendingServices { get; } = [];
@@ -88,6 +90,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
     private readonly AsyncLocal<CallbackScope?> _callback = new();
     private bool _disposed;
     private Task? _disposeTask;
+    private long _activationSequence;
 
     public DougongKernel()
     {
@@ -96,6 +99,9 @@ public sealed partial class DougongKernel : IAsyncDisposable
     }
 
     public IResolver Resolver { get; }
+
+    /// <summary>等待受影响批次在途调用结束的预算；超时后不执行清理并保留诊断。</summary>
+    public TimeSpan DrainTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>最近一次被隔离的观察者/事件处理器异常，供宿主记录诊断。</summary>
     public Exception? LastObserverError { get; private set; }
@@ -220,22 +226,23 @@ public sealed partial class DougongKernel : IAsyncDisposable
                 List<PluginStateChange> changes = [];
                 lock (_sync)
                 {
+                    var stopNeeded = false;
                     foreach (var entry in _entries.Values)
                     {
-                        if (entry.Context is null) continue;
+                        if (entry.Context is null || entry.DrainTimedOut) continue;
                         var missing = MissingRequirements(entry);
                         if (entry.DesiredActive && !entry.Context.IsClosed
+                            && !entry.Context.Invocations.IsClosed
                             && entry.State != PluginState.Deactivating && missing.Count == 0) continue;
-                        selected = entry;
-                        context = entry.Context;
-                        WithdrawServices(entry);
-                        SetState(entry, changes, PluginState.Deactivating,
-                            entry.DesiredActive ? string.Join(" ", missing) : "用户停用。");
-                        stopping = true;
+                        stopNeeded = true;
                         break;
                     }
 
-                    if (selected is null)
+                    if (stopNeeded)
+                    {
+                        selected = null;
+                    }
+                    else
                     {
                         foreach (var entry in _entries.Values)
                         {
@@ -256,6 +263,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
                             selected = entry;
                             entry.PendingServices.Clear();
                             entry.Generation++;
+                            entry.ActivationSequence = ++_activationSequence;
                             var events = new ScopedEventBus(_events);
                             context = new PluginContext(entry.Id,
                                 new ScopedRegistry(this, entry.Id, entry.Generation),
@@ -266,14 +274,19 @@ public sealed partial class DougongKernel : IAsyncDisposable
                             break;
                         }
                     }
+
+                    stopping = stopNeeded;
                 }
 
                 PublishChanges(changes);
-                if (selected is null) return;
                 if (stopping)
-                    await StopAsync(selected, context!).ConfigureAwait(false);
-                else
-                    await RunActivationAsync(selected, context!).ConfigureAwait(false);
+                {
+                    await StopBatchAsync().ConfigureAwait(false);
+                    continue;
+                }
+
+                if (selected is null) return;
+                await RunActivationAsync(selected, context!).ConfigureAwait(false);
             }
         }
         finally { _reconcile.Release(); }
@@ -317,7 +330,26 @@ public sealed partial class DougongKernel : IAsyncDisposable
         PublishChanges(changes);
         if (accepted) return;
 
-        await DrainStoppingBatchAsync(context).ConfigureAwait(false);
+        await RequestStopQuietlyAsync(context).ConfigureAwait(false);
+        try
+        {
+            await context.Invocations.WhenDrained.WaitAsync(DrainTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            lock (_sync)
+            {
+                if (ReferenceEquals(entry.Context, context))
+                {
+                    entry.DrainTimedOut = true;
+                    SetState(entry, changes, PluginState.Failed,
+                        $"激活回滚时服务调用未在 {DrainTimeout} 内结束；不执行清理，需重启宿主。",
+                        new TimeoutException("激活回滚排空超时。"));
+                }
+            }
+            PublishChanges(changes);
+            return;
+        }
         var cleanupError = await DisposeContextAsync(context).ConfigureAwait(false);
         changes = [];
         lock (_sync)
@@ -337,7 +369,6 @@ public sealed partial class DougongKernel : IAsyncDisposable
     private async ValueTask StopAsync(PluginEntry entry, PluginContext context)
     {
         var generation = entry.Generation;
-        await DrainStoppingBatchAsync(context).ConfigureAwait(false);
         var error = await DisposeContextAsync(context).ConfigureAwait(false);
         List<PluginStateChange> changes = [];
         lock (_sync)

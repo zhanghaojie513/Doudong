@@ -96,10 +96,10 @@ public sealed partial class DougongKernel
         await context.CompleteDisposalAsync().ConfigureAwait(false);
     }
 
-    private async Task DrainStoppingBatchAsync(PluginContext context)
+    private async Task StopBatchAsync()
     {
         List<PluginStateChange> changes = [];
-        HashSet<PluginContext> batch = [context];
+        List<(PluginEntry Entry, PluginContext Context)> batch = [];
         lock (_sync)
         {
             bool invalidated;
@@ -108,22 +108,63 @@ public sealed partial class DougongKernel
                 invalidated = false;
                 foreach (var entry in _entries.Values)
                 {
-                    if (entry.Context is not { } current) continue;
+                    if (entry.Context is not { } current || entry.DrainTimedOut) continue;
+                    var missing = MissingRequirements(entry);
                     if (entry.DesiredActive && !current.IsClosed && !current.Invocations.IsClosed
-                        && entry.State != PluginState.Deactivating && MissingRequirements(entry).Count == 0) continue;
+                        && entry.State != PluginState.Deactivating && missing.Count == 0) continue;
                     if (!current.Invocations.IsClosed)
                     {
                         WithdrawServices(entry);
                         invalidated = true;
                     }
                     if (entry.State != PluginState.Deactivating)
-                        SetState(entry, changes, PluginState.Deactivating, "取消并排空服务调用。");
-                    batch.Add(current);
+                        SetState(entry, changes, PluginState.Deactivating,
+                            entry.DesiredActive ? string.Join(" ", missing) : "用户停用。");
+                    if (!batch.Exists(b => ReferenceEquals(b.Context, current)))
+                        batch.Add((entry, current));
                 }
             } while (invalidated);
+
+            // 逆拓扑：后激活的消费者先清理，提供方最后清理。
+            batch.Sort((left, right) => right.Entry.ActivationSequence.CompareTo(left.Entry.ActivationSequence));
         }
+
         PublishChanges(changes);
-        await Task.WhenAll(batch.Select(RequestStopQuietlyAsync)).ConfigureAwait(false);
-        await Task.WhenAll(batch.Select(c => c.Invocations.WhenDrained)).ConfigureAwait(false);
+        await Task.WhenAll(batch.Select(b => RequestStopQuietlyAsync(b.Context))).ConfigureAwait(false);
+
+        var draining = Task.WhenAll(batch.Select(b => b.Context.Invocations.WhenDrained));
+        if (DrainTimeout != Timeout.InfiniteTimeSpan)
+        {
+            try
+            {
+                await draining.WaitAsync(DrainTimeout).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                var timedOut = new List<PluginStateChange>();
+                lock (_sync)
+                {
+                    foreach (var (entry, context) in batch)
+                    {
+                        if (!ReferenceEquals(entry.Context, context)) continue;
+                        entry.DrainTimedOut = true;
+                        SetState(entry, timedOut, PluginState.Failed,
+                            $"服务调用未在排空预算 {DrainTimeout} 内结束；不执行清理，需重启宿主。",
+                            new TimeoutException("服务调用排空超时。"));
+                    }
+                }
+                PublishChanges(timedOut);
+                return;
+            }
+        }
+        else
+        {
+            await draining.ConfigureAwait(false);
+        }
+
+        foreach (var (entry, context) in batch)
+        {
+            await StopAsync(entry, context).ConfigureAwait(false);
+        }
     }
 }

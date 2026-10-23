@@ -234,11 +234,63 @@ public sealed class KernelServiceLeaseTests
         Assert.Equal(PluginState.Stopped, stopped.State);
     }
 
+    [Fact]
+    public async Task Cleanup_runs_consumer_before_provider()
+    {
+        await using var kernel = new DougongKernel();
+        var order = new List<string>();
+        var provider = new WorkerPlugin("test.provider", registerWorker: true, cleanup: () => order.Add("provider"));
+        await kernel.RegisterAsync(() => provider);
+        var consumer = new WorkerPlugin(
+            "test.consumer",
+            requirements: [new ServiceRequirement(typeof(IWorker))],
+            cleanup: () => order.Add("consumer"));        await kernel.RegisterAsync(() => consumer);
+
+        await kernel.DeactivateAsync(provider.Manifest.Id);
+
+        Assert.Equal(["consumer", "provider"], order);
+    }
+
+    [Fact]
+    public async Task Drain_timeout_marks_failure_and_skips_cleanup()
+    {
+        await using var kernel = new DougongKernel();
+        kernel.DrainTimeout = TimeSpan.FromMilliseconds(200);
+        var provider = new WorkerPlugin("test.provider", registerWorker: true);
+        await kernel.RegisterAsync(() => provider);
+        var reference = kernel.Resolver.Resolve<IWorker>();
+        Assert.NotNull(reference);
+
+        var started = Signal();
+        var release = Signal();
+        var invocation = reference.InvokeAsync(async (_, _) =>
+        {
+            started.TrySetResult();
+            // 忽略取消：模拟不合作的服务实现。
+            await release.Task;
+        }).AsTask();
+        try
+        {
+            await started.Task.WaitAsync(Timeout);
+            var handle = await kernel.DeactivateAsync(provider.Manifest.Id).AsTask().WaitAsync(Timeout);
+
+            Assert.Equal(PluginState.Failed, handle.State);
+            Assert.Equal(0, provider.CleanupCount);
+            Assert.Contains((await kernel.GetPluginsAsync()).Single().State, new[] { PluginState.Failed });
+        }
+        finally
+        {
+            release.TrySetResult();
+            await invocation.WaitAsync(Timeout);
+        }
+    }
+
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private sealed class WorkerPlugin(
         string id,
         bool registerWorker = false,
+        Action? cleanup = null,
         params ServiceRequirement[] requirements) : IPlugin
     {
         public PluginManifest Manifest { get; } = PluginManifest.Create(id, "1.0.0", requirements);
@@ -252,6 +304,7 @@ public sealed class KernelServiceLeaseTests
             context.RegisterForCleanup(_ =>
             {
                 CleanupCount++;
+                cleanup?.Invoke();
                 return ValueTask.CompletedTask;
             });
             if (registerWorker) context.Services.Register<IWorker>(new Worker());
