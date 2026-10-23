@@ -9,4 +9,6 @@
   <Project Path="samples/Dougong.Sample.Plugin/Dougong.Sample.Plugin.csproj" />
   <Project Path="samples/Dougong.Sample.Contracts/Dougong.Sample.Contracts.csproj" />
   <Project Path="samples/Dougong.Sample.Shared/Dougong.Sample.Shared.csproj" />
+  <Project Path="samples/Dougong.Sample.Isolated/Dougong.Sample.Isolated.csproj" />
+  <Project Path="samples/Dougong.Sample.IsolatedPlugin/Dougong.Sample.IsolatedPlugin.csproj" />
 </Solution>

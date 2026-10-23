@@ -16,3 +16,7 @@
 共享契约样例用于验证跨 ALC 类型同一性：宿主调用 `DougongKernel.RegisterSharedContract`
 登记契约程序集（按内核实例隔离、返回句柄可撤销），插件程序集则不复制该契约。
 漏配登记时，加载会因装配解析失败而回滚，并给出提示登记契约的诊断。
+
+`Dougong.Sample.Isolated` / `Dougong.Sample.IsolatedPlugin` 专用于覆盖漏配路径：
+测试项目刻意不引用该契约，默认 AssemblyLoadContext 中没有它，因此未登记时装配解析必然失败。
+回归测试会先断言这个前提，避免将来被误引用后静默失效。

@@ -518,14 +518,7 @@ public sealed partial class DougongKernel : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            // 装配加载失败几乎总是宿主漏配共享契约，而不是插件逻辑错误；
-            // 提示可操作的修复方式，避免只看到底层 file-not-found。
-            activationError = ex is FileNotFoundException { FileName: { } missing }
-                ? new InvalidOperationException(
-                    $"插件 '{entry.Id}' 无法加载程序集 '{missing}'。若它是宿主与插件共享的契约，"
-                    + $"请在加载前调用 {nameof(DougongKernel)}.{nameof(RegisterSharedContract)} 登记；"
-                    + "否则请确认该依赖随插件一同部署。", ex)
-                : ex;
+            activationError = ex;
         }
 
         List<PluginStateChange> changes = [];

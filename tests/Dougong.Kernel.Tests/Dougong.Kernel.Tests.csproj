@@ -26,6 +26,12 @@
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
       <Private>false</Private>
     </ProjectReference>
+    <!-- 只保构建顺序；测试项目不能引用 Dougong.Sample.Isolated，否则默认 ALC 中会出现该契约，
+         漏配登记就不再必然失败，回归测试会静默失效。 -->
+    <ProjectReference Include="..\..\samples\Dougong.Sample.IsolatedPlugin\Dougong.Sample.IsolatedPlugin.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <Private>false</Private>
+    </ProjectReference>
   </ItemGroup>
 
 </Project>

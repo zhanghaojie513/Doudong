@@ -32,12 +32,37 @@ public sealed partial class DougongKernel
                 () => CreatePlugin(loaded), manifest, loaded, cancellationToken).ConfigureAwait(false);
             return handle;
         }
+        catch (Exception ex) when (FindMissingAssembly(ex) is { } missing)
+        {
+            context.Unload();
+            throw new InvalidOperationException(
+                DescribeMissingAssembly(missing), ex);
+        }
         catch
         {
             context.Unload();
             throw;
         }
     }
+
+    /// <summary>沿内部异常查找缺失程序集名；反射类型加载错误会包一层。</summary>
+    private static string? FindMissingAssembly(Exception? error)
+    {
+        for (var current = error; current is not null; current = current.InnerException)
+        {
+            if (current is FileNotFoundException { FileName: { } name }) return name;
+            if (current is System.Reflection.ReflectionTypeLoadException { LoaderExceptions: { } inner })
+                foreach (var loaderException in inner)
+                    if (FindMissingAssembly(loaderException) is { } nested) return nested;
+        }
+
+        return null;
+    }
+
+    private static string DescribeMissingAssembly(string missing) =>
+        $"无法加载程序集 '{missing}'。若它是宿主与插件共享的契约，"
+        + $"请在加载前调用 {nameof(DougongKernel)}.{nameof(RegisterSharedContract)} 登记；"
+        + "否则请确认该依赖随插件一同部署。";
 
     /// <summary>
     /// 停止并卸载动态插件：先停用排空，再释放工厂、实例与服务引用，最后调用 ALC.Unload()。
@@ -160,16 +185,7 @@ public sealed partial class DougongKernel
             if (!_entries.TryGetValue(id, out var entry) || entry.CleanupFailed) return null;
             if (FindMissingAssembly(entry.LastActivationError) is not { } missing) return null;
             return new LifecycleConfigurationException(
-                $"插件 '{id}' 无法加载程序集 '{missing}'。若它是宿主与插件共享的契约，"
-                + $"请在加载前调用 {nameof(DougongKernel)}.{nameof(RegisterSharedContract)} 登记；"
-                + "否则请确认该依赖随插件一同部署。", entry.LastActivationError!);
-        }
-
-        static string? FindMissingAssembly(Exception? error)
-        {
-            for (var current = error; current is not null; current = current.InnerException)
-                if (current is FileNotFoundException { FileName: { } name }) return name;
-            return null;
+                DescribeMissingAssembly(missing), entry.LastActivationError!);
         }
     }
 
