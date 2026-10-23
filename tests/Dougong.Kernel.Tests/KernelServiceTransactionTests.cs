@@ -30,18 +30,18 @@ public sealed class KernelServiceTransactionTests
         using var observation = kernel.SubscribeStateChanges(change =>
         {
             if (change.PluginId != provider.Manifest.Id || change.To != PluginState.Active) return;
-            observedCommit = ReferenceEquals(first, reader.Services.Resolve<IMarker>())
-                && ReferenceEquals(second, reader.Services.Resolve<IMarker>("named"));
+            observedCommit = ReferenceEquals(first, kernel.ResolveDiagnostic<IMarker>())
+                && ReferenceEquals(second, kernel.ResolveDiagnostic<IMarker>("named"));
         });
 
         var registering = kernel.RegisterAsync(() => provider).AsTask();
         try
         {
             await staged.Task.WaitAsync(Timeout);
-            Assert.Null(reader.Services.Resolve<IMarker>());
-            Assert.Null(reader.Services.Resolve<IMarker>("named"));
-            Assert.Empty(reader.Services.ResolveAll<IMarker>());
-            Assert.Empty(reader.Services.ResolveAll<IMarker>("named"));
+            Assert.Null(kernel.ResolveDiagnostic<IMarker>());
+            Assert.Null(kernel.ResolveDiagnostic<IMarker>("named"));
+            Assert.Empty(kernel.ResolveAllDiagnostic<IMarker>());
+            Assert.Empty(kernel.ResolveAllDiagnostic<IMarker>("named"));
             Assert.Equal(PluginState.Activating,
                 (await kernel.GetPluginsAsync()).Single(p => p.Id == provider.Manifest.Id).State);
         }
@@ -52,9 +52,9 @@ public sealed class KernelServiceTransactionTests
         }
 
         Assert.True(observedCommit);
-        Assert.Same(first, reader.Services.Resolve<IMarker>());
-        Assert.Same(second, reader.Services.Resolve<IMarker>("named"));
-        Assert.Equal([first], reader.Services.ResolveAll<IMarker>());
+        Assert.Same(first, kernel.ResolveDiagnostic<IMarker>());
+        Assert.Same(second, kernel.ResolveDiagnostic<IMarker>("named"));
+        Assert.Equal([first], kernel.ResolveAllDiagnostic<IMarker>());
     }
 
     [Fact]
@@ -81,8 +81,8 @@ public sealed class KernelServiceTransactionTests
         var handle = await kernel.RegisterAsync(() => second);
 
         Assert.Equal(PluginState.Active, handle.State);
-        Assert.Same(committed, second.Services.Resolve<IMarker>());
-        Assert.Same(pending, second.Services.Resolve<IMarker>("own"));
+        Assert.Same(committed, kernel.ResolveDiagnostic<IMarker>());
+        Assert.Same(pending, kernel.ResolveDiagnostic<IMarker>("own"));
     }
 
     [Theory]
@@ -101,8 +101,8 @@ public sealed class KernelServiceTransactionTests
             context.Services.Register<IMarker>(new Marker("pending"));
             context.RegisterForCleanup(_ =>
             {
-                cleanupSawNoServices = reader.Services.Resolve<IMarker>() is null
-                    && reader.Services.ResolveAll<IMarker>().Count == 0;
+                cleanupSawNoServices = kernel.ResolveDiagnostic<IMarker>() is null
+                    && kernel.ResolveAllDiagnostic<IMarker>().Count == 0;
                 return ValueTask.CompletedTask;
             });
             staged.TrySetResult();
@@ -116,8 +116,8 @@ public sealed class KernelServiceTransactionTests
         try
         {
             await staged.Task.WaitAsync(Timeout);
-            Assert.Null(reader.Services.Resolve<IMarker>());
-            Assert.Empty(reader.Services.ResolveAll<IMarker>());
+            Assert.Null(kernel.ResolveDiagnostic<IMarker>());
+            Assert.Empty(kernel.ResolveAllDiagnostic<IMarker>());
         }
         finally
         {
@@ -127,8 +127,8 @@ public sealed class KernelServiceTransactionTests
 
         Assert.Equal(PluginState.Failed, (await registering).State);
         Assert.True(cleanupSawNoServices);
-        Assert.Null(reader.Services.Resolve<IMarker>());
-        Assert.Empty(reader.Services.ResolveAll<IMarker>());
+        Assert.Null(kernel.ResolveDiagnostic<IMarker>());
+        Assert.Empty(kernel.ResolveAllDiagnostic<IMarker>());
         var consumer = await kernel.RegisterAsync(() =>
             new RegistryPlugin("test.consumer", requirements: [new ServiceRequirement(typeof(IMarker))]));
         Assert.Equal(PluginState.Blocked, consumer.State);
@@ -166,8 +166,8 @@ public sealed class KernelServiceTransactionTests
             stopping = disposeKernel ? kernel.DisposeAsync().AsTask()
                 : kernel.DeactivateAsync(provider.Manifest.Id).AsTask();
             await cancelled.Task.WaitAsync(Timeout);
-            Assert.Null(reader.Services.Resolve<IMarker>());
-            Assert.Empty(reader.Services.ResolveAll<IMarker>());
+            Assert.Null(kernel.ResolveDiagnostic<IMarker>());
+            Assert.Empty(kernel.ResolveAllDiagnostic<IMarker>());
         }
         finally
         {
@@ -178,8 +178,8 @@ public sealed class KernelServiceTransactionTests
         }
 
         Assert.Equal(0, activeNotifications);
-        Assert.Null(reader.Services.Resolve<IMarker>());
-        Assert.Empty(reader.Services.ResolveAll<IMarker>());
+        Assert.Null(kernel.ResolveDiagnostic<IMarker>());
+        Assert.Empty(kernel.ResolveAllDiagnostic<IMarker>());
     }
 
     [Fact]
@@ -217,9 +217,9 @@ public sealed class KernelServiceTransactionTests
             await staged.Task.WaitAsync(Timeout);
             stopping = kernel.DeactivateAsync(dependency.Manifest.Id).AsTask();
             await cancelled.Task.WaitAsync(Timeout);
-            Assert.Null(reader.Services.Resolve<IMarker>());
-            Assert.Empty(reader.Services.ResolveAll<IMarker>());
-            Assert.Null(consumer.Services.Resolve<IMarker>());
+            Assert.Null(kernel.ResolveDiagnostic<IMarker>());
+            Assert.Empty(kernel.ResolveAllDiagnostic<IMarker>());
+            Assert.Null(kernel.ResolveDiagnostic<IMarker>());
         }
         finally
         {
@@ -230,7 +230,7 @@ public sealed class KernelServiceTransactionTests
 
         Assert.False(becameActive);
         Assert.Equal(PluginState.Blocked, (await registering).State);
-        Assert.Empty(reader.Services.ResolveAll<IMarker>());
+        Assert.Empty(kernel.ResolveAllDiagnostic<IMarker>());
     }
 
     [Fact]
@@ -248,14 +248,14 @@ public sealed class KernelServiceTransactionTests
             return ValueTask.CompletedTask;
         });
         Assert.Equal(PluginState.Failed, (await kernel.RegisterAsync(() => provider)).State);
-        Assert.Null(reader.Services.Resolve<IMarker>());
+        Assert.Null(kernel.ResolveDiagnostic<IMarker>());
 
         Assert.Equal(PluginState.Active, (await kernel.ActivateAsync(provider.Manifest.Id)).State);
-        Assert.Equal("current", reader.Services.Resolve<IMarker>()?.Value);
-        Assert.Single(reader.Services.ResolveAll<IMarker>());
+        Assert.Equal("current", kernel.ResolveDiagnostic<IMarker>()?.Value);
+        Assert.Single(kernel.ResolveAllDiagnostic<IMarker>());
         Assert.Throws<ObjectDisposedException>(() =>
             contexts[0].Services.Register<IMarker>(new Marker("stale"), "late"));
-        Assert.Null(reader.Services.Resolve<IMarker>("late"));
+        Assert.Null(kernel.ResolveDiagnostic<IMarker>("late"));
     }
 
     [Fact]
@@ -271,13 +271,13 @@ public sealed class KernelServiceTransactionTests
         await kernel.RegisterAsync(() => provider);
         Assert.Throws<InvalidOperationException>(() =>
             provider.Services.Register<IMarker>(new Marker("late"), "late"));
-        Assert.Null(provider.Services.Resolve<IMarker>("late"));
+        Assert.Null(kernel.ResolveDiagnostic<IMarker>("late"));
 
         await kernel.DeactivateAsync(provider.Manifest.Id);
-        Assert.Null(provider.Services.Resolve<IMarker>());
+        Assert.Null(kernel.ResolveDiagnostic<IMarker>());
         await kernel.ActivateAsync(provider.Manifest.Id);
-        Assert.Equal("2", provider.Services.Resolve<IMarker>()?.Value);
-        Assert.Single(provider.Services.ResolveAll<IMarker>());
+        Assert.Equal("2", kernel.ResolveDiagnostic<IMarker>()?.Value);
+        Assert.Single(kernel.ResolveAllDiagnostic<IMarker>());
     }
 
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);

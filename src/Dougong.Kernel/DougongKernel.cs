@@ -713,10 +713,14 @@ public sealed partial class DougongKernel : IAsyncDisposable
         }
         public TService? Resolve<TService>(string? name = null) where TService : class
         {
+            kernel.EnsureActivationResolveAllowed(owner, generation);
             var matches = kernel.FindServices(owner, generation, typeof(TService), name);
             return matches.Count == 1 ? (TService)matches[0].Instance : null;
         }
-        public IReadOnlyList<TService> ResolveAll<TService>(string? name = null) where TService : class =>
-            [.. kernel.FindServices(owner, generation, typeof(TService), name).Select(e => (TService)e.Instance)];
+        public IReadOnlyList<TService> ResolveAll<TService>(string? name = null) where TService : class
+        {
+            kernel.EnsureActivationResolveAllowed(owner, generation);
+            return [.. kernel.FindServices(owner, generation, typeof(TService), name).Select(e => (TService)e.Instance)];
+        }
     }
 }

@@ -173,10 +173,38 @@ public sealed partial class DougongKernel
     }
 
     /// <summary>诊断用：按类型解析已提交服务，不参与插件运行时调用路径。</summary>
-    internal object? ResolveDiagnostic<TService>(string? name = null) where TService : class
+    internal TService? ResolveDiagnostic<TService>(string? name = null) where TService : class
     {
-        var matches = _services.Find(typeof(TService), name);
-        return matches.Count == 1 ? matches[0].Instance : null;
+        lock (_sync)
+        {
+            var matches = _services.Find(typeof(TService), name);
+            return matches.Count == 1 ? (TService)matches[0].Instance : null;
+        }
+    }
+
+    internal IReadOnlyList<TService> ResolveAllDiagnostic<TService>(string? name = null) where TService : class =>
+        [.. _services.Find(typeof(TService), name).Select(e => (TService)e.Instance)];
+
+    /// <summary>
+    /// 裸解析只允许发生在激活回调窗口内；窗口外必须使用带租约的 <see cref="Resolver"/>，
+    /// 否则停用排空无法覆盖这些调用。
+    /// </summary>
+    internal void EnsureActivationResolveAllowed(PluginId owner, long generation)
+    {
+        lock (_sync)
+        {
+            if (_entries.TryGetValue(owner, out var entry)
+                && entry.Generation == generation
+                && entry.State == PluginState.Activating
+                && entry.Context is { IsClosed: false })
+            {
+                return;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"插件 '{owner}' 只能在激活回调期间使用 Services.Resolve；"
+            + "运行时跨插件访问请改用 Resolver 取得受跟踪调用引用。");
     }
 
     /// <summary>动态加载的插件及其可回收上下文；Detach 后不再持有程序集强引用。</summary>

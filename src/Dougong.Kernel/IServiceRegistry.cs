@@ -3,7 +3,8 @@ namespace Dougong.Kernel;
 /// <summary>
 /// 本插件作用域内的服务注册表视图。注册归属调用它的插件，清理时随作用域一并移除。
 /// <see cref="Resolve{TService}"/> 与 <see cref="ResolveAll{TService}"/> 返回未跟踪的裸引用，
-/// 不提供停用排空保证；跨插件调用应使用 <see cref="PluginContext.Resolver"/>。
+/// 且只在激活回调期间可用；窗口外调用会抛出 <see cref="InvalidOperationException"/>。
+/// 运行时跨插件访问必须使用 <see cref="PluginContext.Resolver"/> 取得受跟踪调用引用。
 /// </summary>
 public interface IServiceRegistry
 {
