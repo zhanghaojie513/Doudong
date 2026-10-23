@@ -185,6 +185,10 @@ public sealed partial class DougongKernel
     internal IReadOnlyList<TService> ResolveAllDiagnostic<TService>(string? name = null) where TService : class =>
         [.. _services.Find(typeof(TService), name).Select(e => (TService)e.Instance)];
 
+    /// <summary>诊断用：按运行时 Type 解析，供跨 ALC 契约测试使用。</summary>
+    internal object? ResolveDiagnosticByType(Type serviceType, string? name = null) =>
+        _services.Find(serviceType, name) is { Count: 1 } matches ? matches[0].Instance : null;
+
     /// <summary>
     /// 裸解析只允许发生在激活回调窗口内；窗口外必须使用带租约的 <see cref="Resolver"/>，
     /// 否则停用排空无法覆盖这些调用。
