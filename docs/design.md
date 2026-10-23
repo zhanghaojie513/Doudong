@@ -4,8 +4,8 @@
 > **文档体系**：本文是总体方案（生态位 / 里程碑 / 决策 / 双轨计划）；"为什么这样设计"见 [philosophy.md](philosophy.md)，"系统长什么样、怎么运转"见 [architecture.md](architecture.md)，旗舰特性 Skill 自动进化见 [skills-evolution.md](skills-evolution.md)，外部前沿事实见 [frontier-roadmap.md](frontier-roadmap.md)，M3 之后的内部迭代排序见 [iteration-roadmap.md](iteration-roadmap.md)。
 > **定位**：以 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的 "Everything is a Plugin" 为架构参照，在 .NET 上**原生实现**一个插件化 Agent Harness SDK——借思想，不移植代码。
 > **名字**：斗拱 = 标准化构件逐层装配、承托整体屋檐的千年木构系统——"一切皆插件"的建筑版。内核是承托层，插件是斗拱件。
-> **上游决策**：底座决定（M.E.AI + MCP 官方 SDK、不自研 provider、不移植 Cordis）见 Obsidian《AI编程助手桌面端-方案C-Avalonia-DotNet.md》§3.2（2026-10-22 修订）。
-> **配套桌面端**：Dougong Desktop（方案 C，Avalonia，独立仓库；程序集前缀 `DougongDesktop.*`，与 SDK 的 `Dougong.*` NuGet 前缀区分）是本 SDK 的第一个目标宿主，但本仓库不包含 UI。双轨协同开发计划见 §12。2026-10-22 统一命名，弃用旧名 DriftCode。
+> **上游决策**：底座决定（M.E.AI + MCP 官方 SDK、不自研 provider、不移植 Cordis）见 Obsidian《Dougong-Desktop-桌面端开发方案.md》§3.2（2026-10-22 修订，2026-10-23 该文档定案为桌面端正式方案）。
+> **配套桌面端**：Dougong Desktop（Avalonia，独立仓库；程序集前缀 `DougongDesktop.*`，与 SDK 的 `Dougong.*` NuGet 前缀区分）是本 SDK 的第一个目标宿主，但本仓库不包含 UI。桌面端方案见 Obsidian《Dougong-Desktop-桌面端开发方案.md》，双轨协同开发计划见 §12。2026-10-22 统一命名，弃用旧名 DriftCode。
 
 ---
 
@@ -281,9 +281,9 @@ DougongDesktop.PtyHost（按需启动，持有 PTY/shell 句柄）
 
 ## 12. 桌面端协同开发计划（Dougong Desktop 双轨）
 
-桌面端是独立仓库（**Dougong Desktop**，方案 C：Avalonia + TKCode.Arc + ACP Client；程序集前缀 `DougongDesktop.*`——2026-10-22 统一命名，弃用旧名 DriftCode），组件选型、MVP 边界、风险表以 Obsidian《AI编程助手桌面端-方案C-Avalonia-DotNet.md》为准。本节只定**双轨协同路线**：两轨各自做什么、在哪个节点会合、互相之间如何做到不阻塞。2026-10-22 编制。
+桌面端是独立仓库（**Dougong Desktop**：Avalonia + TKCode.Arc + 内嵌 Dougong SDK，兼容外部 ACP Agent；程序集前缀 `DougongDesktop.*`——2026-10-22 统一命名，弃用旧名 DriftCode），组件选型、MVP 边界、风险表以 Obsidian《Dougong-Desktop-桌面端开发方案.md》为准。本节只定**双轨协同路线**：两轨各自做什么、在哪个节点会合、互相之间如何做到不阻塞。2026-10-22 编制，2026-10-23 随桌面端定案更新。
 
-> 与总案的关系：本节按"Dougong 的配套桌面 = 方案 C（Avalonia 轨）"编制；Obsidian 总案中"方案 A（Electron+React）为主线"的定位是否随之调整，由用户择期裁定，本节不替它做决定。
+> 与总案的关系：桌面端已于 2026-10-23 定案为本项目的 Avalonia 方案（见该文档 §11）；Obsidian 总案中的 ACP 协议决策与通用约束继续有效，历史方案 A/B 文档仅作参考。
 
 ### 12.1 双轨总览
 
@@ -303,8 +303,8 @@ DougongDesktop.PtyHost（按需启动，持有 PTY/shell 句柄）
 5. **审批维度分离**：`ToolAccess` 是 None/Read/Write/Execute/Network/External 六类权限；桌面审批交互状态另建类型。P1 对齐正常审批，P2 按 architecture.md §6.5 验证断线、过期、取消和重启语义。
 6. **完成状态以故障验收为准**：§7 和 architecture.md §6 是本轮桌面设计基线；实现/测试未完成，不再以“已有三进程”推导“恢复重连已解决”。§12.1 表中的周数仅保留为原估算，需随实际验证和单人产能重估。
 
-### 12.3 关键依赖与验收（桌面侧摘要，详表见方案 C）
+### 12.3 关键依赖与验收（桌面侧摘要，详表见桌面端方案）
 
-- 组件风险前置：TKCode.Arc 为 `0.3.0-preview`，P0 的组件验证必须覆盖方案 C §2.3 列出的 Agent 刚需组件（含流式 Markdown 的 `Append` 压测），不合格项在 P0 内决定替代方案。
+- 组件风险前置：TKCode.Arc 为 `0.3.0-preview`，P0 的组件验证必须覆盖桌面端方案 §2.3 列出的 Agent 刚需组件（含流式 Markdown 的 `Append` 压测），不合格项在 P0 内决定替代方案。
 - P1 验收：正常消息、流式、工具与审批分别在外部 ACP Agent 和自有 AgentHost 上通过；自有入口还需通过启动认证与版本检查。
 - P2 验收：architecture.md §6.7 全部故障用例通过；分别证明 UI 存活重连、AgentHost 崩溃恢复和 PTY 退出策略。断电持久性按存储声明独立验证，不能用杀进程结果代替；打包产物在干净 Windows 机器验证。
