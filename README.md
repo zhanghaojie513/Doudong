@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/zhanghaojie513/Dougong"><img src="https://img.shields.io/badge/repository-Dougong-2f6f5e?style=flat-square" alt="Repository"></a>
+  <a href="https://github.com/zhanghaojie513/Dougong/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/zhanghaojie513/Dougong/build.yml?style=flat-square&label=build" alt="Build"></a>
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-10.0-512bd4?style=flat-square" alt=".NET 10"></a>
   <a href="https://github.com/zhanghaojie513/Dougong/releases"><img src="https://img.shields.io/badge/version-0.1.0--alpha.1-orange?style=flat-square" alt="Version 0.1.0-alpha.1"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-1f883d?style=flat-square" alt="MIT License"></a>
@@ -26,7 +27,7 @@
 
 Dougong 目前处于 **实验性 Alpha 阶段**，目标框架为 `net10.0`。
 
-`Dougong.Kernel` 已经完成一轮生命周期、服务、事件和动态加载实现，并拥有 148 项内核行为测试。两轮 M0 审核确认的阻断问题已修复：失败或排空超时的代次不能被再次激活或卸载，激活、取消、排空、事件与清理各有独立预算且清理超时会停止后续清理，裸解析只对本次激活回调的异步流开放，`ResolveAll` 返回全部提供方，清理顺序按实际依赖边计算，普通退订立即释放事件引用，状态增量在锁内原子提交并在内核销毁时结束，观察者诊断只保留共享字符串，快照不再携带插件清单因而不会阻止动态插件回收，并补充了真实共享契约的跨 ALC 验收。M0 仍需最后一次确认后才关闭，暂不进入 M1 正式实现。
+`Dougong.Kernel` 已经完成一轮生命周期、服务、事件和动态加载实现，并拥有 156 项内核行为测试。三轮 M0 审核确认的阻断问题已修复：失败或排空超时的代次不能被再次激活或卸载，激活、取消、排空、事件与清理各有独立预算且清理超时会停止后续清理，裸解析只对本次激活回调的异步流开放，`ResolveAll` 返回全部提供方，清理顺序按实际依赖边计算，普通退订立即释放事件引用，状态增量在锁内原子提交并在内核销毁时结束，观察者诊断只保留共享字符串，快照不再携带插件清单因而不会阻止动态插件回收，并补充了真实共享契约的跨 ALC 验收。M0 已于 2026-10-24 关闭；M1 首批已完成 Agent 契约与 MAF / 自研循环的确定性对比，正式实现选定自研循环，真实 provider 对比仍待验证。
 
 当前仓库包含：
 
@@ -134,6 +135,7 @@ dotnet pack Dougong.slnx -c Release --output ./artifacts/packages
 | [未来路线](docs/iteration-roadmap.md) | M3 之后的演进方向和退出条件 |
 | [Skill 演进](docs/skills-evolution.md) | 复盘、沉淀、审批和加载的 Skill 进化设想 |
 | [开发历程素材](docs/dev-journey.md) | M0 期间真实发生的问题与判断错误，供开发记录梳理 |
+| [M1 候选对比](docs/m1-candidate-comparison.md) | MAF 包装与自研循环的同用例对比、版本与选择理由 |
 
 ## 路线图
 
