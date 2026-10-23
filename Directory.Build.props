@@ -10,7 +10,7 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <Version>0.1.0-alpha.1</Version>
     <Authors>Haojie Zhang</Authors>
-    <RepositoryUrl>https://github.com/zhanghaojie513/dougong</RepositoryUrl>
+    <RepositoryUrl>https://github.com/zhanghaojie513/Dougong</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>

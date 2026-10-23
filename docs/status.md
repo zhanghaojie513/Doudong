@@ -8,7 +8,7 @@
 - 实际工程为 6 个产品项目 + 1 个测试项目 + 3 个样例项目（新增共享契约样例）；Telemetry 未建，产品项目无外部 NuGet 引用。Agent/Ai/Mcp/Acp 尚无业务实现，CLI 仅输出占位文字。
 - 已修复本轮审核问题：排空超时后拒绝再激活与卸载；`UnloadAsync` 在停用后重新核验失败标志与最终状态；`LoadAsync` 取消/失败回滚残留条目；激活、取消、服务排空、事件排空与清理各自有独立预算；`Context.DisposeAsync` 走内核协调器，不能绕过隔离；`ResolveAll` 返回全部提供方；清理顺序按实际依赖边计算；普通退订立即从事件总线移除并可回收；事件先排空再清理；状态提交在锁内原子完成，新增登记/移除增量与共享诊断 DTO。
 - .NET SDK 10.0.402 可用；完整解决方案 Release 构建通过（0 警告、0 错误），148 项内核行为测试全部通过（0 跳过）。
-- 首个提交 `5c1bbe5` 及后续内核切片均已推送至 [GitHub 仓库](https://github.com/zhanghaojie513/dougong)。本轮修复尚未提交。
+- 首个提交 `5c1bbe5` 及后续内核切片均已推送至 [GitHub 仓库](https://github.com/zhanghaojie513/Dougong)。本轮修复尚未提交。
 - [前沿调查](frontier-roadmap.md)与[未来迭代路线](iteration-roadmap.md)已建立；后者面向 M3 之后，不作为当前 M0 已完成的证据。
 - M0 期间的实现缺陷、测试缺陷与判断错误已整理到[开发历程素材](dev-journey.md)，供后续梳理开发记录使用；该文件不是验收依据。
 

@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zhanghaojie513/dougong"><img src="https://img.shields.io/badge/repository-dougong-2f6f5e?style=flat-square" alt="Repository"></a>
+  <a href="https://github.com/zhanghaojie513/Dougong"><img src="https://img.shields.io/badge/repository-Dougong-2f6f5e?style=flat-square" alt="Repository"></a>
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-10.0-512bd4?style=flat-square" alt=".NET 10"></a>
-  <a href="https://github.com/zhanghaojie513/dougong/releases"><img src="https://img.shields.io/badge/version-0.1.0--alpha.1-orange?style=flat-square" alt="Version 0.1.0-alpha.1"></a>
+  <a href="https://github.com/zhanghaojie513/Dougong/releases"><img src="https://img.shields.io/badge/version-0.1.0--alpha.1-orange?style=flat-square" alt="Version 0.1.0-alpha.1"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-1f883d?style=flat-square" alt="MIT License"></a>
 </p>
 
@@ -106,8 +106,8 @@ Dougong 关注的是 Agent 的**承托层**，而不是某一个模型或某一�
 ### 构建和测试
 
 ```bash
-git clone https://github.com/zhanghaojie513/dougong.git
-cd dougong
+git clone https://github.com/zhanghaojie513/Dougong.git
+cd Dougong
 
 dotnet restore Dougong.slnx
 dotnet build Dougong.slnx -c Release
