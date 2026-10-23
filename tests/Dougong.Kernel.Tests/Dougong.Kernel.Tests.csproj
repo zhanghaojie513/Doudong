@@ -15,4 +15,12 @@
     <ProjectReference Include="..\..\src\Dougong.Kernel\Dougong.Kernel.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 只保证样例插件先构建，不引用其程序集：动态加载路径必须走真实 ALC。 -->
+    <ProjectReference Include="..\..\samples\Dougong.Sample.Plugin\Dougong.Sample.Plugin.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <Private>false</Private>
+    </ProjectReference>
+  </ItemGroup>
+
 </Project>

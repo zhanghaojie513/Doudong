@@ -86,6 +86,7 @@ internal sealed class PluginEntry
     public long ActivationSequence { get; set; }
     public long Generation { get; set; }
     public PluginContext? Context { get; set; }
+    public DougongKernel.LoadedPlugin? Loaded { get; set; }
     public Dictionary<ServiceKey, object> PendingServices { get; } = [];
 }
 

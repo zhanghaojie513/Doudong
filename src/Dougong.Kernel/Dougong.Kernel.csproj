@@ -5,5 +5,8 @@
   <PropertyGroup>
     <Description>Dougong 插件内核——一切皆插件的承托层（生命周期 / 服务注册表 / 事件总线 / ALC 动态加载）</Description>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Dougong.Kernel.Tests" />
+  </ItemGroup>
 
 </Project>

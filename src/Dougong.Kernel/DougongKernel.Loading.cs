@@ -1,0 +1,172 @@
+using System.Reflection;
+
+namespace Dougong.Kernel;
+
+public sealed partial class DougongKernel
+{
+    /// <summary>
+    /// 从程序集动态加载插件。程序集进入独立可回收上下文，Kernel 契约由宿主共享。
+    /// 只加载可信进程内插件；ALC 不提供权限或故障隔离。
+    /// </summary>
+    public async ValueTask<PluginHandle> LoadAsync(
+        string assemblyPath,
+        string? typeName = null,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureLifecycleCallAllowed();
+        ArgumentException.ThrowIfNullOrWhiteSpace(assemblyPath);
+        cancellationToken.ThrowIfCancellationRequested();
+        var fullPath = Path.GetFullPath(assemblyPath);
+        if (!File.Exists(fullPath))
+            throw new FileNotFoundException($"插件程序集不存在：{fullPath}", fullPath);
+
+        var context = new PluginLoadContext(fullPath);
+        try
+        {
+            var assembly = context.LoadFromAssemblyPath(fullPath);
+            var pluginType = FindPluginType(assembly, typeName);
+            var manifest = ReadManifest(pluginType);
+            var loaded = new LoadedPlugin(context, pluginType, manifest.Id);
+            var handle = await RegisterCoreAsync(
+                () => CreatePlugin(loaded), manifest, loaded, cancellationToken).ConfigureAwait(false);
+            return handle;
+        }
+        catch
+        {
+            context.Unload();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// 停止并卸载动态插件：先停用排空，再释放工厂、实例与服务引用，最后调用 ALC.Unload()。
+    /// 卸载是协作式的，回收需要 GC 实际执行；此方法不承诺立即释放内存。
+    /// </summary>
+    public async ValueTask UnloadAsync(PluginId id, CancellationToken cancellationToken = default)
+    {
+        EnsureLifecycleCallAllowed();
+        cancellationToken.ThrowIfCancellationRequested();
+        LoadedPlugin? loaded;
+        lock (_sync)
+        {
+            if (!_entries.TryGetValue(id, out var entry))
+                throw new KeyNotFoundException($"插件 '{id}' 未登记。");
+            loaded = entry.Loaded;
+            if (loaded is null)
+                throw new InvalidOperationException($"插件 '{id}' 不是动态加载的，不能卸载。");
+            if (entry.CleanupFailed || entry.DrainTimedOut)
+                throw new InvalidOperationException(
+                    $"插件 '{id}' 未能干净停止，拒绝卸载以免留下未释放资源。");
+        }
+
+        await DeactivateGenerationAsync(id, null, cancellationToken).ConfigureAwait(false);
+
+        lock (_sync)
+        {
+            if (!_entries.TryGetValue(id, out var entry)) return;
+            if (entry.State is not (PluginState.Stopped or PluginState.Failed)) return;
+
+            entry.PendingServices.Clear();
+            _services.RemoveOwner(id, entry.Generation);
+            _entries.Remove(id);
+        }
+
+        loaded.Detach();
+    }
+
+    private async ValueTask<PluginHandle> RegisterCoreAsync(
+        Func<IPlugin> factory,
+        PluginManifest manifest,
+        LoadedPlugin? loaded,
+        CancellationToken cancellationToken)
+    {
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_entries.ContainsKey(manifest.Id))
+                throw new InvalidOperationException($"插件 '{manifest.Id}' 已登记。");
+            if (FindDependencyCycle(manifest.Id, manifest) is { } cycle)
+                throw new InvalidOperationException(
+                    $"插件依赖成环：{string.Join(" -> ", cycle)}。");
+            _entries.Add(manifest.Id, new PluginEntry
+            {
+                Id = manifest.Id, Manifest = manifest, Factory = factory,
+                DesiredActive = true, Loaded = loaded,
+            });
+        }
+
+        await EvaluateAsync(cancellationToken).ConfigureAwait(false);
+        return GetHandle(manifest.Id);
+    }
+
+    private static Type FindPluginType(Assembly assembly, string? typeName)
+    {
+        if (typeName is not null)
+        {
+            var explicitType = assembly.GetType(typeName, throwOnError: false)
+                ?? throw new InvalidOperationException($"程序集内找不到类型 '{typeName}'。");
+            if (!typeof(IPlugin).IsAssignableFrom(explicitType))
+                throw new InvalidOperationException($"类型 '{typeName}' 未实现 IPlugin。");
+            return explicitType;
+        }
+
+        var candidates = assembly.GetTypes()
+            .Where(t => typeof(IPlugin).IsAssignableFrom(t) && t is { IsAbstract: false, IsInterface: false })
+            .ToArray();
+        return candidates.Length switch
+        {
+            1 => candidates[0],
+            0 => throw new InvalidOperationException("程序集内没有实现 IPlugin 的公开类型。"),
+            _ => throw new InvalidOperationException(
+                $"程序集内有 {candidates.Length} 个 IPlugin 类型，请显式指定 typeName。"),
+        };
+    }
+
+    private static PluginManifest ReadManifest(Type pluginType)
+    {
+        var instance = (IPlugin)Activator.CreateInstance(pluginType)!;
+        return instance.Manifest
+            ?? throw new InvalidOperationException($"插件 '{pluginType.FullName}' 的清单为 null。");
+    }
+
+    private static IPlugin CreatePlugin(LoadedPlugin loaded) =>
+        (IPlugin)Activator.CreateInstance(loaded.PluginType)!;
+
+    /// <summary>诊断用：取得动态插件的入口程序集，供装卸测试检查加载上下文。</summary>
+    internal Assembly? GetLoadedAssembly(PluginId id)
+    {
+        lock (_sync)
+        {
+            return _entries.TryGetValue(id, out var entry) && entry.Loaded is { } loaded
+                ? loaded.PluginType.Assembly
+                : null;
+        }
+    }
+
+    /// <summary>诊断用：按类型解析已提交服务，不参与插件运行时调用路径。</summary>
+    internal object? ResolveDiagnostic<TService>(string? name = null) where TService : class
+    {
+        var matches = _services.Find(typeof(TService), name);
+        return matches.Count == 1 ? matches[0].Instance : null;
+    }
+
+    /// <summary>动态加载的插件及其可回收上下文；Detach 后不再持有程序集强引用。</summary>
+    internal sealed class LoadedPlugin(PluginLoadContext context, Type pluginType, PluginId id)
+    {
+        private PluginLoadContext? _context = context;
+        private Type? _pluginType = pluginType;
+
+        public PluginId Id { get; } = id;
+
+        public Type PluginType => _pluginType
+            ?? throw new InvalidOperationException($"插件 '{Id}' 的程序集引用已释放。");
+        public void Detach()
+        {
+            var loadedContext = Interlocked.Exchange(ref _context, null);
+            Interlocked.Exchange(ref _pluginType, null);
+            loadedContext?.Unload();
+        }
+
+        public bool TryUnload() => Volatile.Read(ref _context) is null;
+    }
+}
