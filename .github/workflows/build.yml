@@ -20,8 +20,8 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          # 与 README「环境要求」一致；global.json 尚未固定，因此显式指定
-          dotnet-version: '10.0.x'
+          # 与 global.json 一致；那里固定了 SDK 版本并启用 Microsoft.Testing.Platform 运行器。
+          dotnet-version: '10.0.402'
 
       - name: Restore
         run: dotnet restore Dougong.slnx
@@ -29,14 +29,19 @@ jobs:
       - name: Build
         run: dotnet build Dougong.slnx -c Release --no-restore
 
+      # 测试栈是 xUnit v3 + Microsoft.Testing.Platform。
+      # 不能用 VSTest 的 `--logger "console;verbosity=normal"`：MTP 不接受该参数，
+      # 表现为「Zero tests ran」+ Handshake failures（退出码 5）——
+      # 看起来像测试挂了，实际一个测试都没跑起来。
+      # MTP 的等价参数是 `--output Detailed`。
+      - name: Test
+        run: dotnet test Dougong.slnx -c Release --no-build --output Detailed
+
       # 偶发失败已被观察到一次，重试一次以区分 flaky 与真失败；
       # 重试仍失败则说明是真实回归。
-      - name: Test
-        run: dotnet test Dougong.slnx -c Release --no-build --logger "console;verbosity=normal"
-
       - name: Test (retry on flake)
         if: failure()
-        run: dotnet test Dougong.slnx -c Release --no-build --logger "console;verbosity=normal"
+        run: dotnet test Dougong.slnx -c Release --no-build --output Detailed
 
       - name: Pack (verify packaging works)
         run: dotnet pack Dougong.slnx -c Release --no-build -o artifacts/packages
