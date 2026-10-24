@@ -7,8 +7,9 @@ namespace Dougong.Agent;
 /// 不允许任何旁路直接调用 <see cref="IAgentTool.ExecuteAsync"/>。
 /// </summary>
 /// <remarks>
-/// 本切片实现：schema 校验、参数规范化、调用 ID 去重、权限描述采集、终态记录。
-/// 尚未实现：审批流程、资源锁与工作区独占、执行前对文件版本的复核。
+/// 本切片实现：schema 校验、参数规范化、调用 ID 去重、权限描述采集、
+/// 审批与执行前复核、两级资源协调（串行 / 工作区独占）、终态记录。
+/// 尚未实现：资源级读写键、跨工作区仲裁、完整 JSON Schema 校验。
 /// 这些缺口在 docs/m1-candidate-comparison.md 中如实记录，不宣称已具备。
 /// </remarks>
 public interface IToolDispatcher

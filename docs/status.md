@@ -88,7 +88,7 @@
   - Waygate 另外暴露两种"空字符串当缺失"的协议变体：后续帧用空字符串覆盖 `id`/`name`
     （原 `??` 只挡 null），以及用空字符串表示未完成的 `finish_reason`（导致每个 delta 误下发）。
     已修复为"只接受非空值"。
-- [ ] 唯一 dispatcher：schema/参数规范化、审批身份绑定、执行前校验、调用去重、资源冲突和取消终态。
+- [x] 唯一 dispatcher：schema/参数规范化、审批身份绑定、执行前校验、调用去重、资源冲突和取消终态。
   - 已实现（`src/Dougong.Agent/ToolDispatcher.cs`）：最小 JSON schema 校验（顶层 type 与 required）、
     调用 ID 去重、权限描述采集、七种明确终态、旁路检测用的调用记录、冻结工具声明的对外投影。
   - **工具声明通道已落地**：`Dougong.Agent.ToolDeclarations` 通过 `ChatOptions` 附加属性
@@ -98,6 +98,10 @@
     审批绑定 session/turn/invocation/工具版本/规范化参数摘要/工作区/权限范围/有效期；
     执行前进锁复核，参数、权限或并发计划任一变化即拒绝；等待审批期间不持锁；
     两档并发（Serial / WorkspaceExclusive）。
+  - 两档并发**共用同一把工作区执行权**（Serial 额外先取全局串行权）。这是故障验收抓出来的
+    真实缺陷：原先两级各用一把独立信号量，串行工具能与同工作区的独占工具重叠执行，
+    等于取消没有真正生效。反证已确认——改回独立双锁后，`uncooperative-cancel-still-holds-lock`
+    立刻失败。
   - 9 项自检（`-- approval`）全部通过，并用禁用复核的反证确认测试有效
     （权限升级、并发变化、过期三项立刻失败）。
   - 已实现文件版本复核（`WorkspacePathGuard.cs`）：工具通过
@@ -117,7 +121,14 @@
     "提交失败后仍执行了工具 1 次"）。
   - **未实现**：分支（branch）、压缩失败协议、断电级持久化（当前只声明
     `SurvivesProcessCrash`，不声明 `SurvivesPowerLoss`）。
-- [ ] 存储失败、工具副作用后未提交、同文件写冲突、跨会话 shell、工具替换、流式参数不全等故障测试。
+- [x] 存储失败、工具副作用后未提交、同文件写冲突、跨会话 shell、工具替换、流式参数不全等故障测试。
+  - 6 项故障验收（`-- failure`，`spike/Dougong.Agent.Comparison/FailureAcceptanceChecks.cs`）：
+    同文件并发编辑被串行化、读写竞争在复核阶段被拦下、取消不合作仍持锁且如实报"已执行"、
+    并发派发的执行次数等于报告成功次数（单一执行入口）、提交失败发生在副作用之前、
+    崩溃窗口报 `OutcomeUnknown` 而非重放。重复 5 轮全绿。
+  - 这一套立刻抓到一个真实缺陷（两档并发不互斥），见上一节。
+  - **未覆盖**：跨会话 shell（尚未实现 shell 工具）、工具替换（`Register` 句柄够用但未做替换语义测试）、
+    流式参数不全（已在 `-- contract` 的畸形 JSON/分片中覆盖，未单列）。
 - [ ] 上下文压缩：预算计算、保留工具配对、摘要失败不覆盖原历史、检查点可续跑。
   - 已实现（`src/Dougong.Agent/IContextCompactor.cs`、`ContextCompaction.cs`）：
     三阶段检查点（Select → Summarize → Retry → Completed/Failed）、滑动窗口选区间、
@@ -194,6 +205,10 @@
   9 项自检通过（含反证）；等待审批期间不持锁，避免慢审批阻塞工作区。
 - 2026-10-24：M1 提交屏障：`IAgentStore` 契约与 JSONL 实现，四个提交落点串起
   "先提交意图、再产生副作用"；6 项自检通过，并用移除屏障的反证确认测试有效。
+- 2026-10-24：M1 故障验收：补 6 项故障用例（同文件并发编辑、读写竞争、取消不合作、单一执行入口、
+  提交失败先于副作用、崩溃窗口报未知结果），重复 5 轮全绿。该套件当场抓到一个真实缺陷——
+  `Serial` 与 `WorkspaceExclusive` 原本各用一把独立信号量，串行工具能与同工作区独占工具重叠执行；
+  已改为共用同一把工作区执行权，并用改回双锁的反证确认检查有效。156 项内核测试与全部自检套件通过。
 - 2026-10-24：M1 真实 provider 验证：用 MiMo 与 MiniMax 各跑 5 项真实调用（含真实编码任务），全部通过；期间修复三个仅真实协议暴露的缺陷（工具声明未传给模型、空 choices 越界、参数分片语义）。
 - 2026-10-24：M1 首批：落地 `IAgentRuntime`/`IToolDispatcher`/`IAgentTool` 契约与最小 dispatcher；用 10 项确定性反例对比 MAF 包装与自研循环，均 10/10，选择自研循环（详见 m1-candidate-comparison.md）。真实 provider 对比待验证。
 - 2026-10-23：补漏配路径的进程内回归：新增 `Dougong.Sample.Isolated`（测试项目刻意不引用）与对应插件，未登记时装配解析必然失败，因此能在 CI 中真实覆盖拒绝与回滚；测试先断言该前提，误引用会显式失败而非静默假通过。同时修正 `LoadAsync` 在类型发现阶段抛 `ReflectionTypeLoadException` 时未给出可操作诊断的问题。Release 构建与 148 项内核测试通过。

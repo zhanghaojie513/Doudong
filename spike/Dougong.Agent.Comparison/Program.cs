@@ -30,6 +30,9 @@ public static class Program
         if (args.FirstOrDefault() == "compaction")
             return await CompactionChecks.RunAsync();
 
+        if (args.FirstOrDefault() == "failure")
+            return await FailureAcceptanceChecks.RunAsync();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 

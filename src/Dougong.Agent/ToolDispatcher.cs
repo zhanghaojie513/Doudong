@@ -4,12 +4,12 @@ namespace Dougong.Agent;
 
 /// <summary>
 /// <see cref="IToolDispatcher"/> 的首版实现。它是唯一执行工具的地方：
-/// 校验参数、去重调用 ID、采集权限描述、记录终态。
+/// 校验参数、去重调用 ID、采集权限描述、请求审批、协调执行权、复核后执行并记录终态。
 /// </summary>
 /// <remarks>
 /// 能力边界（与 docs/m1-candidate-comparison.md 一致）：
-/// 尚未实现审批、资源锁/工作区独占、执行前文件版本复核。
-/// 因此当前实现不能声称具备“批准 A 执行 B”的防护。
+/// 资源协调只有两级——全局串行 + 按工作区独占，尚无资源级读写键与跨工作区仲裁。
+/// schema 校验只覆盖顶层 type 与 required，不是完整校验器。
 /// </remarks>
 public sealed class ToolDispatcher : IToolDispatcher
 {
@@ -164,33 +164,62 @@ public sealed class ToolDispatcher : IToolDispatcher
         }
 
         // 阶段二：进锁后复核（防"批准 A、执行 B"）。
-        using var lease = _gate is null
-            ? null
-            : await _gate.EnterAsync(execution, _workspace, cancellationToken).ConfigureAwait(false);
-
-        if (!approvalIsStillValid(registration, invocation, permission, execution, binding, out var staleReason))
-            return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
-                ToolCallOutcome.RejectedNotApproved,
-                Diagnostic: staleReason, Permission: permission);
-
+        // 等待执行权时被取消属于"尚未执行"，必须返回终态而不是把取消异常抛给调用方。
+        IDisposable? lease;
         try
         {
-            var result = await registration.Tool.ExecuteAsync(invocation, cancellationToken)
-                .ConfigureAwait(false);
-            return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
-                ToolCallOutcome.Succeeded, result, Permission: permission);
+            lease = _gate is null
+                ? null
+                : await _gate.EnterAsync(execution, _workspace, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
-                ToolCallOutcome.CancelledDuringExecution, Diagnostic: "执行中被取消。",
-                Permission: permission);
+                ToolCallOutcome.CancelledBeforeExecution,
+                Diagnostic: "等待执行权时被取消，未执行。", Permission: permission);
         }
-        catch (Exception ex)
+        catch (ObjectDisposedException ex)
         {
+            // 闸门已被宿主释放：不执行，但不能把异常抛给调用方而丢掉这条调用的终态。
             return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
-                ToolCallOutcome.Failed, Diagnostic: $"{ex.GetType().Name}: {ex.Message}",
-                Permission: permission);
+                ToolCallOutcome.Failed,
+                Diagnostic: $"资源闸门已释放，未执行：{ex.ObjectName}", Permission: permission);
+        }
+
+        using (lease)
+        {
+            if (!approvalIsStillValid(registration, invocation, permission, execution, binding, out var staleReason))
+                return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
+                    ToolCallOutcome.RejectedNotApproved,
+                    Diagnostic: staleReason, Permission: permission);
+
+            try
+            {
+                var result = await registration.Tool.ExecuteAsync(invocation, cancellationToken)
+                    .ConfigureAwait(false);
+
+                // 取消是协作式的：工具若忽略取消并完成，就必须如实报成功。
+                // 伪装成"已撤销"会让上层误判副作用没发生。
+                return cancellationToken.IsCancellationRequested
+                    ? new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
+                        ToolCallOutcome.Succeeded, result,
+                        Diagnostic: "取消已请求，但工具未响应取消并完成了执行；副作用可能已发生。",
+                        Permission: permission)
+                    : new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
+                        ToolCallOutcome.Succeeded, result, Permission: permission);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
+                    ToolCallOutcome.CancelledDuringExecution, Diagnostic: "执行中被取消。",
+                    Permission: permission);
+            }
+            catch (Exception ex)
+            {
+                return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
+                    ToolCallOutcome.Failed, Diagnostic: $"{ex.GetType().Name}: {ex.Message}",
+                    Permission: permission);
+            }
         }
     }
 
