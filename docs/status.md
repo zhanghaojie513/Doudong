@@ -10,7 +10,7 @@
 - .NET SDK 10.0.402 可用；完整解决方案 Release 构建通过（0 警告、0 错误），156 项内核行为测试全部通过（0 跳过）。
 - 首个提交 `5c1bbe5` 及后续切片均已推送至 [GitHub 仓库](https://github.com/zhanghaojie513/Doudong)。
 - [前沿调查](vision/frontier-roadmap.md)与[未来迭代路线](vision/iteration-roadmap.md)已建立；后者面向 M3 之后，不作为当前 M0 已完成的证据。
-- M0 期间的实现缺陷、测试缺陷与判断错误已整理到[开发历程素材](journey/m0-dev-journey.md)，供后续梳理开发记录使用；该文件不是验收依据。
+- M0 期间的实现缺陷、测试缺陷与判断错误已整理到[开发历程素材](journey/m0-dev-journey.md)，M1 的同类素材见 [m1-dev-journey.md](journey/m1-dev-journey.md)；这两份文件不是验收依据。
 
 ## 评审修订清单
 

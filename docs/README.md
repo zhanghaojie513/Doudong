@@ -35,7 +35,7 @@ journey/ = 开发记录：各里程碑真实发生的问题与判断。复盘素
 | 文档 | 内容 |
 |---|---|
 | [m0-dev-journey.md](journey/m0-dev-journey.md) | M0 期间真实发生的问题与判断错误，供开发记录梳理 |
-| `m1-dev-journey.md` | M1 关闭后按同一格式整理 |
+| [m1-dev-journey.md](journey/m1-dev-journey.md) | M1 期间 15 个真实缺陷、5 个测试缺陷与 4 类判断错误；核心教训是「假模型全绿不等于协议正确」 |
 
 ## 阅读路径
 
