@@ -42,6 +42,9 @@ public static class Program
         if (args.FirstOrDefault() == "shell")
             return await ShellChecks.RunAsync();
 
+        if (args.FirstOrDefault() == "usage")
+            return await UsageChecks.RunAsync();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 

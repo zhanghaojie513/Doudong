@@ -69,10 +69,27 @@ public sealed record ScriptedUpdate(
     string? FunctionName = null,
     string? ArgumentsJson = null,
     bool AbortAfter = false,
-    TimeSpan? Delay = null)
+    TimeSpan? Delay = null,
+    long? UsageInput = null,
+    long? UsageOutput = null,
+    long? UsageTotal = null)
 {
     public ChatResponseUpdate ToUpdate()
     {
+        if (UsageInput is not null || UsageOutput is not null)
+        {
+            var input = UsageInput;
+            var output = UsageOutput;
+            // 用量走标准 UsageContent：自定义附加属性对 M.E.AI 的聚合与中间件不可见。
+            return new ChatResponseUpdate(ChatRole.Assistant,
+                [new UsageContent(new UsageDetails
+                {
+                    InputTokenCount = input,
+                    OutputTokenCount = output,
+                    TotalTokenCount = UsageTotal,
+                })]);
+        }
+
         if (FunctionName is null)
             return new ChatResponseUpdate(ChatRole.Assistant, Text ?? string.Empty);
 
@@ -86,6 +103,12 @@ public sealed record ScriptedUpdate(
 
         return new ChatResponseUpdate(ChatRole.Assistant, contents);
     }
+
+    /// <summary>
+    /// 构造一个只携带 usage 的片段，用于验证用量记账走标准 <see cref="UsageContent"/>。
+    /// </summary>
+    public static ScriptedUpdate Usage(long input, long output, long? total = null) =>
+        new(UsageInput: input, UsageOutput: output, UsageTotal: total);
 
     /// <summary>
     /// 返回 null 表示“参数尚未完整”；调用方据此判断是否需要继续聚合。

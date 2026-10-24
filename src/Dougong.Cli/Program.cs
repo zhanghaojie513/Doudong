@@ -144,7 +144,12 @@ public static class Program
 
         await using var store = await JsonlAgentStore.OpenAsync(sessionPath, sessionId)
             .ConfigureAwait(false);
-        using var client = ChatClientFactory.Create(config);
+        // 用量记账：装饰器包在连接器外面，不改变任何调用语义。
+        // 账目随会话保存，`/usage` 可查；这里不猜单价，只汇总 token 与调用次数。
+        var ledger = new UsageLedger();
+        using var client = new UsageRecordingChatClient(
+            ChatClientFactory.Create(config), ledger, sessionId,
+            config.Name, config.Model, config.Protocol);
         var dispatcher = new ToolDispatcher(
             new ConsoleApprover(),
             new ToolResourceGate(),
@@ -172,7 +177,7 @@ public static class Program
 
             if (input.StartsWith('/'))
             {
-                if (!HandleCommand(input, store, messages, sessionPath)) return 0;
+                if (!HandleCommand(input, store, messages, sessionPath, ledger, sessionId)) return 0;
                 continue;
             }
 
@@ -225,7 +230,8 @@ public static class Program
     }
 
     private static bool HandleCommand(
-        string input, IAgentStore store, List<AgentMessage> history, string sessionPath)
+        string input, IAgentStore store, List<AgentMessage> history, string sessionPath,
+        UsageLedger ledger, string sessionId)
     {
         switch (input.Trim().ToLowerInvariant())
         {
@@ -237,6 +243,7 @@ public static class Program
                 Console.WriteLine("  /exit     退出");
                 Console.WriteLine("  /history  查看内存中的历史条数（会话日志以 JSONL 为准）");
                 Console.WriteLine("  /where    显示当前会话文件");
+                Console.WriteLine("  /usage    显示本会话的 token 用量与调用次数");
                 return true;
 
             case "/history":
@@ -247,10 +254,47 @@ public static class Program
                 Console.WriteLine($"  {sessionPath}");
                 return true;
 
+            case "/usage":
+                PrintUsage(ledger, sessionId);
+                return true;
+
             default:
                 Console.WriteLine($"  未知命令：{input}");
                 return true;
         }
+    }
+
+    /// <summary>
+    /// 打印用量汇总。未报告的调用单独列出：
+    /// 把"不知道"显示成 0 会让人以为不花钱。
+    /// </summary>
+    private static void PrintUsage(UsageLedger ledger, string sessionId)
+    {
+        var summary = ledger.Summarize(sessionId);
+        if (summary.Calls == 0)
+        {
+            Console.WriteLine("  本会话还没有模型调用。");
+            return;
+        }
+
+        Console.WriteLine($"  调用      : {summary.Calls} 次（失败 {summary.FailedCalls}）");
+        Console.WriteLine($"  输入      : {summary.InputTokens} tokens");
+        Console.WriteLine($"  输出      : {summary.OutputTokens} tokens");
+
+        if (summary.TotalTokens is { } total)
+            Console.WriteLine($"  合计      : {total} tokens");
+        else
+            Console.WriteLine("  合计      : 未知（provider 没有报告用量）");
+
+        if (summary.UnreportedCalls > 0)
+        {
+            Console.WriteLine(
+                $"  ⚠ 未报告  : {summary.UnreportedCalls} 次调用没有用量数据，"
+                + $"覆盖率 {summary.ReportedRatio:P0}");
+        }
+
+        Console.WriteLine($"  累计耗时  : {summary.TotalElapsed.TotalSeconds:0.0}s");
+        Console.WriteLine("  成本      : 未计算（依赖 provider 价目表，本层不猜单价）");
     }
 
     /// <summary>读取会话列表。只显示文件与序号范围，不解析完整历史。</summary>

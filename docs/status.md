@@ -186,8 +186,18 @@
     `--branch <会话> [--at N]` 分叉；会话可用完整路径、标识或序号（1 = 最新）指定。
   - shell 工具已接入（`DOUGONG_SHELL=1` 启用）。已用 DeepSeek 端到端验证：
     模型请求执行命令 → 控制台审批显示具体命令与 `Execute` 权限 → 执行 → 退出码与真实输出回填。
-  - **未实现**：同目录多会话并行（当前一次只开一个会话）、
-    用量成本记账（§5.1 的 OTel 聚合）。
+  - **用量记账已实现**（`src/Dougong.Ai/UsageLedger.cs`）：`UsageRecordingChatClient` 作为装饰器
+    包住任意 `IChatClient`，记录每次调用的输入/输出/总量、耗时与成败；`UsageLedger` 按会话与
+    自然日聚合。11 项自检（`-- usage`）覆盖流式/非流式、失败与取消留痕、会话隔离、按日汇总、
+    并发追加、文本不被用量污染、未报告与零可区分。
+  - **修掉一个真实缺陷**：usage 原先以自定义附加属性（`["usage"]`）传出，
+    而 M.E.AI 的聚合与中间件只认标准 `UsageContent`，账目会静默丢失。已改为标准类型；
+    反证确认——把发送端改回附加属性，`client-emits-usage-content` 立刻失败。
+  - 真实端点验证：DeepSeek `deepseek-flash` 报回输入 352 / 输出 3 tokens，`/usage` 正确显示。
+  - **不猜单价**：本层只汇总 token 与调用次数，金额依赖 provider 价目表，由宿主换算；
+    `UnreportedCalls` 与可空的 `TotalTokens` 用于区分"零消耗"与"不知道"。
+  - **未实现**：OTel 指标导出（属 M2，届时把 `UsageLedger` 的汇总接到
+    `OpenTelemetry` 1.20.1 的 meter 上）、同目录多会话并行（当前一次只开一个会话）。
 
 ## 桌面恢复与重连（设计已修订，未实现）
 
@@ -270,6 +280,10 @@
   9 项自检通过（含反证）；等待审批期间不持锁，避免慢审批阻塞工作区。
 - 2026-10-24：M1 提交屏障：`IAgentStore` 契约与 JSONL 实现，四个提交落点串起
   "先提交意图、再产生副作用"；6 项自检通过，并用移除屏障的反证确认测试有效。
+- 2026-10-24：M1 用量记账：`UsageRecordingChatClient` 装饰器 + `UsageLedger` 会话/按日聚合，
+  11 项自检（含两个反证）。修掉一个真实缺陷：usage 走自定义附加属性时 M.E.AI 的聚合
+  与中间件看不见，账目会静默丢失；改用标准 `UsageContent`。真实端点验证 352/3 tokens。
+
 - 2026-10-24：M1 shell 工具：`ShellTool` + `ShellEnvironment` 落地，11 项验收（含两个反证）。
   修掉一个真实安全缺陷：`ProcessStartInfo.Environment` 初始含父进程全部变量，
   只加白名单不等于只传白名单，宿主密钥会被子进程继承。CLI 侧默认不启用，需显式开启。

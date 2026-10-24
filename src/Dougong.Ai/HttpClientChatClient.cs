@@ -51,17 +51,21 @@ public sealed class HttpClientChatClient : IChatClient
         // 非流式只是"把流全部收集起来"：这样两种调用路径共用同一套解析，
         // 不会出现流式正确、非流式漏字段的双实现漂移。
         var contents = new List<AIContent>();
-        var text = new StringBuilder();
         UsageDetails? usage = null;
 
         await foreach (var update in GetStreamingResponseAsync(messages, options, cancellationToken)
             .ConfigureAwait(false))
         {
-            contents.AddRange(update.Contents);
-            if (update.Text is { Length: > 0 } chunk) text.Append(chunk);
-            usage ??= update.AdditionalProperties is { } props
-                && props.TryGetValue("usage", out var value) && value is UsageDetails details
-                ? details : null;
+            foreach (var content in update.Contents)
+            {
+                // 用量走标准的 UsageContent，而不是自定义附加属性：
+                // M.E.AI 的中间件与 ChatResponse 聚合都识别 UsageContent，
+                // 自定义键对它们不可见。
+                if (content is UsageContent usageContent)
+                    usage = usageContent.Details;
+                else
+                    contents.Add(content);
+            }
         }
 
         var message = new ChatMessage(ChatRole.Assistant, contents);
@@ -113,12 +117,9 @@ public sealed class HttpClientChatClient : IChatClient
 
         if (decoder.Usage is { } usage)
         {
-            // 用量通过附加属性带出：IChatClient 的流式增量没有独立的 usage 通道。
-            // 用无内容的更新承载，避免凭空多出一段空文本。
-            yield return new ChatResponseUpdate
-            {
-                AdditionalProperties = new AdditionalPropertiesDictionary { ["usage"] = usage },
-            };
+            // 用量用标准的 UsageContent 承载：M.E.AI 的聚合与中间件认这个类型，
+            // 自定义附加属性对它们不可见，账目会静默丢失。
+            yield return new ChatResponseUpdate(ChatRole.Assistant, [new UsageContent(usage)]);
         }
     }
 
