@@ -38,10 +38,17 @@ public sealed class McpAgentTool : IAgentTool
         _serverName = serverName;
         _timeout = timeout ?? TimeSpan.FromMinutes(2);
 
+        // 分隔符必须满足 provider 对工具名的字符约束：实测 OpenAI 兼容端点
+        // 只接受 ^[a-zA-Z0-9_-]+$，用 '/' 会被直接拒绝（400）。
+        // 用双下划线既满足约束，也足够少见，不易与远端工具名本身冲突。
+        var qualifiedName = $"{serverName}__{tool.Name}";
+
         Descriptor = new ToolDescriptor(
-            // 工具 ID 带上 server 前缀：不同 server 可能暴露同名工具。
-            $"{serverName}/{tool.Name}",
-            tool.Name,
+            // 工具 ID 与模型可见的 Name 都必须跨 server 唯一。
+            // 若两个 server 各自暴露 alpha 而 Name 都是 "alpha"，模型无法区分，
+            // dispatcher 的 Name 别名也只能指向其中一个。
+            qualifiedName,
+            qualifiedName,
             // 工具版本用 schema 的摘要代替：远端没有版本概念，
             // 但"schema 变了"必须能反映成版本变化，否则旧审批会继续有效。
             SchemaFingerprint(tool.JsonSchema),

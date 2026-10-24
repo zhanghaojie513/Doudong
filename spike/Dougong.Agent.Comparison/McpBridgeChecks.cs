@@ -153,7 +153,7 @@ public static class McpBridgeChecks
             var bridged = new McpAgentTool(tools.First(t => t.Name == "echo"), "demo");
             var descriptor = bridged.Descriptor;
 
-            if (!descriptor.Id.StartsWith("demo/", StringComparison.Ordinal))
+            if (!descriptor.Id.StartsWith("demo__", StringComparison.Ordinal))
                 return $"工具 ID 未带 server 前缀：{descriptor.Id}";
             if (descriptor.InputSchema.ValueKind is not JsonValueKind.Object)
                 return "schema 未透传";
@@ -310,34 +310,60 @@ public static class McpBridgeChecks
 
     /// <summary>
     /// 回归：模型只看得到工具的 Name，回传调用里也是 Name。
-    /// 若 dispatcher 只按 Id 查找，就会出现"工具已注册却被判未注册"。
+    /// 若 dispatcher 只按 Id 查找，Id 与 Name 不同的工具就会"已注册却被判未注册"。
     /// </summary>
+    /// <remarks>
+    /// 不用 MCP 桥接来测：桥接现在让 Id 与 Name 相同（provider 约束所致），
+    /// 测不到差异。改为直接构造一个 Id ≠ Name 的工具，钉住 dispatcher 的路由语义。
+    /// </remarks>
     private static async Task<string?> NameRouting(Func<string, string>? echo)
     {
-        var (client, tools) = await StartAsync(echo);
-        await using (client)
+        _ = echo;
+        await Task.CompletedTask;
+
+        var tool = new AliasProbeTool();
+        var dispatcher = new ToolDispatcher();
+        dispatcher.Register(tool);
+
+        if (tool.Descriptor.Id == tool.Descriptor.Name)
+            return "测试前提不成立：Id 与 Name 相同";
+
+        using var document = JsonDocument.Parse("""{}""");
+
+        // 按 Name 派发：模拟模型回传。
+        var byName = await dispatcher.DispatchAsync(new ToolInvocation(
+            "c1", tool.Descriptor.Name, document.RootElement.Clone()));
+        if (byName.Outcome != ToolCallOutcome.Succeeded)
+            return $"按 Name 派发失败：{byName.Outcome}（{byName.Diagnostic}）";
+
+        // 按 Id 派发：宿主内部路径也必须可用。
+        var byId = await dispatcher.DispatchAsync(new ToolInvocation(
+            "c2", tool.Descriptor.Id, document.RootElement.Clone()));
+        return byId.Outcome == ToolCallOutcome.Succeeded
+            ? null : $"按 Id 派发失败：{byId.Outcome}（{byId.Diagnostic}）";
+    }
+
+    /// <summary>Id 与 Name 故意不同，用于验证 dispatcher 的 Name 别名路由。</summary>
+    private sealed class AliasProbeTool : IAgentTool
+    {
+        private int _calls;
+
+        public int ExecutionCount => Volatile.Read(ref _calls);
+
+        public ToolDescriptor Descriptor { get; } = new(
+            "internal/id-1", "probe_name", "1.0.0", "alias probe",
+            JsonDocument.Parse("""{"type":"object"}""").RootElement.Clone());
+
+        public ToolPermission DescribePermission(JsonElement a) =>
+            new(ToolAccess.None, true, [], [], []);
+        public ToolExecutionPlan DescribeExecution(JsonElement a) => ToolExecutionPlan.Serial;
+
+        public ValueTask<AgentToolResult> ExecuteAsync(
+            ToolInvocation invocation, CancellationToken cancellationToken)
         {
-            var bridged = new McpAgentTool(tools.First(t => t.Name == "echo"), "demo");
-            var dispatcher = new ToolDispatcher();
-            dispatcher.Register(bridged);
-
-            // 桥接工具的 Id 带 server 前缀，Name 是远端原名——两者不同。
-            if (bridged.Descriptor.Id == bridged.Descriptor.Name)
-                return "测试前提不成立：Id 与 Name 相同，测不到路由差异";
-
-            using var document = JsonDocument.Parse("""{"text":"routed"}""");
-
-            // 用 Name 派发：模拟模型回传。
-            var byName = await dispatcher.DispatchAsync(new ToolInvocation(
-                "c1", bridged.Descriptor.Name, document.RootElement.Clone()));
-            if (byName.Outcome != ToolCallOutcome.Succeeded)
-                return $"按 Name 派发失败：{byName.Outcome}（{byName.Diagnostic}）";
-
-            // 用 Id 派发：宿主内部路径也必须可用。
-            var byId = await dispatcher.DispatchAsync(new ToolInvocation(
-                "c2", bridged.Descriptor.Id, document.RootElement.Clone()));
-            return byId.Outcome == ToolCallOutcome.Succeeded
-                ? null : $"按 Id 派发失败：{byId.Outcome}（{byId.Diagnostic}）";
+            Interlocked.Increment(ref _calls);
+            using var document = JsonDocument.Parse("""{"ok":true}""");
+            return ValueTask.FromResult(new AgentToolResult(document.RootElement.Clone()));
         }
     }
 

@@ -308,6 +308,10 @@ public sealed record AgentToolResult(JsonElement Content, JsonElement? Details =
 
 **M2.1 实现要点**：`McpAgentTool` 做**适配**而非继承（`McpClientTool` 是 `AIFunction` 子类，而 `AIFunction` 不可子类化）。三条硬约束落到代码上：权限一律报 `IsKnown=false`，不把远端的 `readOnlyHint` 翻译成 `Read`（恶意或有 bug 的 server 可以声称只读却写文件）；工具版本用 schema 的 SHA-256 摘要，使 schema 变化必然改变版本；远端 `IsError` 抛专门异常，与传输失败区分开。远端工具一律取工作区独占——无法知道它是否改动了本工作区。
 
+**M2.2 变化检测**：`McpToolRegistry` 订阅 `notifications/tools/list_changed`，在远端工具集合或 schema 变化后**全量刷新**本 server 的注册。刷新采用"先全部注销、再全部注册"——dispatcher 拒绝重复注册同一 Id，所以无法原子替换。接受这个极短的不可用窗口，因为此时的正确行为是"工具暂时不在列表里"，而不是"工具在列表里但指向旧 schema"：后者会让模型按旧 schema 生成参数、远端正按新 schema 解释同一批参数，即"批准了 A、执行了 B"。
+
+**工具名约束（实测）**：OpenAI 兼容端点只接受 `^[a-zA-Z0-9_-]+$`。因此模型可见名称用 `server__tool`，不能用 `server/tool`——后者会被 provider 直接 400 拒绝。名称必须跨 server 唯一：两个 server 各自暴露 `alpha` 时，若模型可见名称相同则模型无法区分，dispatcher 的 Name 别名也只能指向其中一个。
+
 ### 5.3 Acp 层（Dougong.Acp）
 
 协议面（C# 无官方 SDK，手写实现，协议版本锁定 + 兼容测试）：

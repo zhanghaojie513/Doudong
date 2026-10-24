@@ -57,6 +57,9 @@ public static class Program
         if (args.FirstOrDefault() == "mcp")
             return await McpBridgeChecks.RunAsync();
 
+        if (args.FirstOrDefault() == "mcp-reload")
+            return await McpReloadChecks.RunAsync();
+
         // 供端到端测试使用的最小 stdio MCP server。
         if (args.FirstOrDefault() == "mcp-server")
             return await McpTestServer.RunAsync();

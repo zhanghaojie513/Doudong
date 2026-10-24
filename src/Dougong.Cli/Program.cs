@@ -182,6 +182,7 @@ public static class Program
         // MCP server 默认不连：远端工具权限未知，必须显式开启。
         // 格式：DOUGONG_MCP_SERVERS="name=command args;name2=command args"
         var mcpClients = new List<ModelContextProtocol.Client.McpClient>();
+        var mcpRegistries = new List<McpToolRegistry>();
         foreach (var (name, command, arguments) in ParseMcpServers())
         {
             try
@@ -200,11 +201,12 @@ public static class Program
                     transport, null, null, CancellationToken.None);
                 mcpClients.Add(mcpClient);
 
-                var tools = await mcpClient.ListToolsAsync(cancellationToken: CancellationToken.None);
-                foreach (var tool in tools)
-                    dispatcher.Register(new McpAgentTool(tool, name));
+                // 用注册器而不是逐个 Register：它订阅 list_changed 并在远端变更时刷新。
+                var registry = await McpToolRegistry.ConnectAsync(
+                    dispatcher, name, mcpClient, CancellationToken.None);
+                mcpRegistries.Add(registry);
 
-                Console.WriteLine($"MCP '{name}'：已桥接 {tools.Count} 个工具");
+                Console.WriteLine($"MCP '{name}'：已桥接 {registry.ToolCount} 个工具（订阅变更通知）");
             }
             catch (Exception ex)
             {
@@ -236,7 +238,12 @@ public static class Program
 
             if (input.StartsWith('/'))
             {
-                if (!HandleCommand(input, store, messages, sessionPath, ledger, sessionId)) return 0;
+                if (!HandleCommand(input, store, messages, sessionPath, ledger, sessionId))
+                {
+                    foreach (var registry in mcpRegistries) registry.Dispose();
+                    foreach (var mcpClient in mcpClients) await mcpClient.DisposeAsync();
+                    return 0;
+                }
                 continue;
             }
 

@@ -249,8 +249,20 @@
     已让 dispatcher 同时按 Id 与 Name 路由，并有反证。
   - CLI 接入：`DOUGONG_MCP_SERVERS="name=command args;..."`，默认不连。
     子进程不继承宿主环境（与 shell 工具同理）。真实 stdio server 端到端验证通过。
-  - **未实现**：MCP 工具列表热更新（变化检测）、resources/prompts、HTTP transport、
-    ACP 全部。
+  - **MCP 变化检测已实现**（`src/Dougong.Mcp/McpToolRegistry.cs`）：
+    订阅 `notifications/tools/list_changed`，远端工具集合或 schema 变化后全量刷新注册。
+    4 项验收（`-- mcp-reload`）用真实 server 主动发通知触发：工具刷新、schema 变更
+    使版本变（旧审批失效）、移除后不再被派发、多 server 刷新互不影响。
+    反证：去掉订阅后 4 项全部失败。
+  - **刷新是「先全部注销、再全部注册」**，存在极短的工具不可用窗口。接受这个窗口的
+    理由：此时正确行为是「工具暂时不在列表里」，而不是「工具在列表里但指向旧 schema」
+    ——后者会让模型按旧 schema 生成参数、远端正按新 schema 解释，即「批准了 A、执行了 B」。
+  - **修掉一个真实缺陷**：模型可见的工具名最初用 `server/tool` 形式，真实 provider
+    直接 400 拒绝（只接受 `^[a-zA-Z0-9_-]+$`）。改用 `server__tool`。
+    这条只有真实端点能发现——假模型不校验工具名字符集。
+  - **工具名必须跨 server 唯一**：两个 server 各自暴露 `alpha` 时，若模型可见名称相同，
+    模型无法区分，dispatcher 的 Name 别名也只能指向一个。因此 Id 与 Name 都带 server 前缀。
+  - **未实现**：MCP resources/prompts、HTTP transport、断线重连、ACP 全部。
 - [ ] M2 L1 默认候选待审；受限自动启用需用户选择，来源/作用域/撤销/隐私双数据流和最小留出评测齐备。
 - [ ] M3 API/行为兼容、作者模板和卸载测试稳定化；完整 Skill 进化和评测优化按验证结果后续建设。
 
@@ -328,6 +340,11 @@
   9 项自检通过（含反证）；等待审批期间不持锁，避免慢审批阻塞工作区。
 - 2026-10-24：M1 提交屏障：`IAgentStore` 契约与 JSONL 实现，四个提交落点串起
   "先提交意图、再产生副作用"；6 项自检通过，并用移除屏障的反证确认测试有效。
+- 2026-10-24：M2.2 MCP 变化检测：McpToolRegistry 订阅 list_changed 并全量刷新，
+  4 项验收用真实 server 主动通知触发（含反证 4/4）。
+  修掉一个只有真实端点能发现的缺陷：工具名用 server/tool 形式被 provider 400 拒绝
+  （只接受 ^[a-zA-Z0-9_-]+$），改用 server__tool。
+
 - 2026-10-24：M2 起步：MCP 工具桥接（ModelContextProtocol 2.3.0）。
   远端工具包装为 IAgentTool 走同一 dispatcher；annotations 不作授权、schema 变化改版本、
   IsError 记失败。8 项验收用真实 client/server 内存配对（含三个反证）。
