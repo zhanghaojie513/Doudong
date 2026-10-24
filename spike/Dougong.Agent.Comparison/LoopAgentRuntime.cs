@@ -51,7 +51,7 @@ public sealed class LoopAgentRuntime(IChatClient client, IToolDispatcher dispatc
                 catch (Exception ex)
                 {
                     moved = false;
-                    streamFailure = $"模型流中断：{ex.Message}";
+                    streamFailure = $"模型流中断：{ex.Message}" + (ex.InnerException is { } i ? $" | inner: {i.GetType().Name}: {i.Message}" : "");
                 }
 
                 if (cancelled)

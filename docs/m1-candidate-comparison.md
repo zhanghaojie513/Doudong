@@ -139,7 +139,10 @@ design.md §2.1 要求的"再用一家真实 provider 完成相同编码任务"�
 | `deepseek-v4.1-flash`（途关 Waygate） | `https://www.haihao.xyz:8443/v1` | **5/5 PASS** |
 | `GLM-5.3`（智谱 BigModel） | `https://open.bigmodel.cn/api/paas/v4` | **5/5 PASS** |
 | `GLM-5.3-Flash`（智谱 BigModel） | `https://open.bigmodel.cn/api/paas/v4` | **5/5 PASS** |
-| `gpt-6.1-sol`（Routin） | `https://api.routin.ai`（Anthropic 协议） | **5/5 PASS** |
+| `gpt-6.1-sol`（Routin） | `https://api.routin.ai`（Anthropic） | **5/5 PASS** |
+| `deepseek-flash`（DeepSeek · Chat Completions） | `https://api.deepseek.com` | **5/5 PASS** |
+| `deepseek-flash`（DeepSeek · Anthropic） | `https://api.deepseek.com/anthropic` | **5/5 PASS** |
+| `deepseek-flash`（DeepSeek · Responses） | `https://api.deepseek.com` | **5/5 PASS** |
 
 未通过（账户状态问题，非代码缺陷）：
 
@@ -151,7 +154,10 @@ design.md §2.1 要求的"再用一家真实 provider 完成相同编码任务"�
 两种协议、两个适配器，按端点协议选用：
 
 - **OpenAI chat-completions**（`OpenAiCompatibleChatClient`）：MiMo、MiniMax、Waygate、BigModel
-- **Anthropic messages**（`AnthropicMessagesChatClient`）：Routin 的 gpt-6.1-sol
+- **Anthropic messages**（`AnthropicMessagesChatClient`）：Routin 的 gpt-6.1-sol、DeepSeek 的 `/anthropic` 兼容层
+- **Responses**（`ResponsesChatClient`）：DeepSeek 的 `/responses`
+
+DeepSeek 同时提供三种协议，是唯一能被三种适配器完整覆盖的 provider，因此作为协议矩阵的基准。
 
 两个适配器都实现同一个 `IChatClient`，因此被比较的始终是 Dougong 的循环，不是连接器差异。
 协议差异是结构性的，不是风格差异：
@@ -163,6 +169,16 @@ design.md §2.1 要求的"再用一家真实 provider 完成相同编码任务"�
 | 流式参数 | `tool_calls[].function.arguments` 片段 | `input_json_delta.partial_json` |
 | 终结信号 | 每个 chunk 的 `finish_reason` | `message_delta.stop_reason` |
 | system 提示 | messages 内的一条 | 独立 `system` 字段 |
+
+Responses 是第三种形状：
+
+| | chat-completions | Responses |
+|---|---|---|
+| 输入 | `messages[]` | `input`（字符串或消息数组），system 用 `instructions` |
+| 工具声明 | `tools[].function.parameters` | `tools[]` 扁平，`{type:function,name,parameters}` |
+| 工具调用 | `choices[].message.tool_calls[]` | `output[]` 里 `type:function_call` 条目 |
+| 流式参数 | `tool_calls[].function.arguments` 片段 | `response.function_call_arguments.delta`，按 `output_index` 聚合 |
+| 终结 | 每 chunk 的 `finish_reason` | `response.completed` |
 
 验证项（每项都是可观察行为，不是"跑通不报错"）：
 
@@ -178,6 +194,12 @@ design.md §2.1 要求的"再用一家真实 provider 完成相同编码任务"�
 
 > **协议变体的价值**：五个端点里，Waygate 是唯一暴露"空字符串当缺失"这一族的。
 > 如果只测一两家，这类兼容问题会一直潜伏到用户现场。
+
+> **一次环境误判**：DeepSeek 的 Anthropic 端点最初报 `SSL/EOF`，一度被怀疑是服务端限制。
+> 实际原因是 **Git Bash 把以 `/` 开头的环境变量做了 MSYS 路径转换**
+> （`/anthropic/v1/messages` → `C:/tools/Git/anthropic/v1/messages`），拼出来的主机名成了
+> `api.deepseek.comC:/...`。设置 `MSYS_NO_PATHCONV=1` 后 5/5 通过。
+> 现在 LiveRun 在启动时检测这个特征并拒绝运行，避免把工具链问题记成协议缺陷。
 
 > **一条测试设计教训**：`unknown-tool-real` 最初写成"要求模型去调用不存在的工具名"，
 > 结果间歇性失败——模型有时不听话，直接改调了已注册的 `read_file`。

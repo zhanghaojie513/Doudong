@@ -30,6 +30,19 @@ public static class LiveRun
         }
 
         var protocol = Environment.GetEnvironmentVariable("DOUGONG_PROVIDER_PROTOCOL") ?? "openai";
+        var anthropicPath = Environment.GetEnvironmentVariable("DOUGONG_ANTHROPIC_PATH") ?? "/v1/messages";
+
+        // Git Bash 会把以 / 开头的环境变量值做 MSYS 路径转换
+        // （/v1/messages → C:/tools/Git/v1/messages），拼出来的主机名就会错。
+        // 这里提前拦住，避免把环境问题误判成协议缺陷。
+        if (anthropicPath.Contains(":/", StringComparison.Ordinal))
+        {
+            Console.WriteLine(
+                $"LIVE: 拒绝运行——DOUGONG_ANTHROPIC_PATH 被 MSYS 转换成了 '{anthropicPath}'；" +
+                "请设置 MSYS_NO_PATHCONV=1 或改用相对路径。");
+            return 3;
+        }
+
         Console.WriteLine($"LIVE: model={model}, base={baseUrl}, protocol={protocol}");
         var failures = 0;
 
@@ -52,7 +65,7 @@ public static class LiveRun
             var dispatcher = new ToolDispatcher();
             var tool = new FakeTool("read_file", ["path"]);
             dispatcher.Register(tool);
-            var client = CreateClient(baseUrl, apiKey, model, protocol);
+            using var client = CreateClient(baseUrl, apiKey, model, protocol);
             var runtime = new LoopAgentRuntime(client, dispatcher);
 
             var events = await CollectAsync(runtime,
@@ -76,7 +89,7 @@ public static class LiveRun
             var dispatcher = new ToolDispatcher();
             var tool = new FakeTool("write_file", ["path", "content"]);
             dispatcher.Register(tool);
-            var client = CreateClient(baseUrl, apiKey, model, protocol);
+            using var client = CreateClient(baseUrl, apiKey, model, protocol);
             var runtime = new LoopAgentRuntime(client, dispatcher);
 
             var events = await CollectAsync(runtime,
@@ -98,7 +111,7 @@ public static class LiveRun
             var dispatcher = new ToolDispatcher();
             var registered = new FakeTool("read_file", ["path"]);
             dispatcher.Register(registered);
-            var client = CreateClient(baseUrl, apiKey, model, protocol);
+            using var client = CreateClient(baseUrl, apiKey, model, protocol);
             var runtime = new LoopAgentRuntime(client, dispatcher);
 
             var events = await CollectAsync(runtime,
@@ -123,7 +136,7 @@ public static class LiveRun
         {
             var dispatcher = new ToolDispatcher();
             dispatcher.Register(new FakeTool("read_file", ["path"]));
-            var client = CreateClient(baseUrl, apiKey, model, protocol);
+            using var client = CreateClient(baseUrl, apiKey, model, protocol);
             var runtime = new LoopAgentRuntime(client, dispatcher);
 
             var events = await CollectAsync(runtime, "Say exactly: hello");
@@ -178,7 +191,7 @@ public static class LiveRun
                 dispatcher.Register(write);
                 dispatcher.Register(list);
 
-                var client = CreateClient(baseUrl, apiKey, model, protocol);
+                using var client = CreateClient(baseUrl, apiKey, model, protocol);
                 var runtime = new LoopAgentRuntime(client, dispatcher);
 
                 var events = await CollectAsync(runtime,
@@ -209,9 +222,14 @@ public static class LiveRun
     /// </summary>
     private static IChatClient CreateClient(
         string baseUrl, string apiKey, string model, string protocol) =>
-        protocol.Equals("anthropic", StringComparison.OrdinalIgnoreCase)
-            ? new AnthropicMessagesChatClient(baseUrl, apiKey, model)
-            : new OpenAiCompatibleChatClient(baseUrl, apiKey, model);
+        protocol.ToLowerInvariant() switch
+        {
+            "anthropic" => new AnthropicMessagesChatClient(
+                baseUrl, apiKey, model,
+                Environment.GetEnvironmentVariable("DOUGONG_ANTHROPIC_PATH") ?? "/v1/messages"),
+            "responses" => new ResponsesChatClient(baseUrl, apiKey, model),
+            _ => new OpenAiCompatibleChatClient(baseUrl, apiKey, model),
+        };
 
     private static async Task<IReadOnlyList<AgentEvent>> CollectAsync(
         IAgentRuntime runtime, string input)

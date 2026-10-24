@@ -31,13 +31,20 @@ public sealed class AnthropicMessagesChatClient : IChatClient
     private readonly string _baseUrl;
     private readonly string _apiKey;
     private readonly string _model;
+    private readonly string _messagesPath;
 
+    /// <param name="messagesPath">
+    /// messages 端点的相对路径。多数实现是 <c>/v1/messages</c>；
+    /// DeepSeek 把 Anthropic 兼容层挂在 <c>/anthropic/v1/messages</c>，需显式传入。
+    /// </param>
     public AnthropicMessagesChatClient(
-        string baseUrl, string apiKey, string model, HttpClient? http = null)
+        string baseUrl, string apiKey, string model,
+        string messagesPath = "/v1/messages", HttpClient? http = null)
     {
         _baseUrl = baseUrl.TrimEnd('/');
         _apiKey = apiKey;
         _model = model;
+        _messagesPath = messagesPath;
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(180) };
     }
 
@@ -227,7 +234,7 @@ public sealed class AnthropicMessagesChatClient : IChatClient
 
     private HttpRequestMessage CreateRequest(JsonObject body)
     {
-        var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/v1/messages")
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}{_messagesPath}")
         {
             Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
         };

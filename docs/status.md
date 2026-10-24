@@ -80,7 +80,8 @@
     `EnableInvocableFunctionBypassing`。
   - **真实 provider 已验证**：六个模型各 5/5 通过——`mimo-v2.6-flash`、`MiniMax-M3.1-Flash`、
     `deepseek-v4.1-flash`（Waygate）、`GLM-5.3`、`GLM-5.3-Flash`（BigModel）走 OpenAI 协议，
-    `gpt-6.1-sol`（Routin）走 Anthropic 协议。两个适配器实现同一 `IChatClient`，
+    `gpt-6.1-sol`（Routin）走 Anthropic 协议；`deepseek-flash` 的三种协议（chat-completions、
+    Anthropic 兼容层、Responses）各 5/5。三个适配器实现同一 `IChatClient`，
     被比较的始终是循环。Routin **Plan** 端点因订阅未激活 403，非代码问题。
   - 真实调用暴露三个假模型测不出的缺陷：循环未把工具声明传给模型（模型输出 XML 伪调用）、
     空 `choices` 帧越界、参数分片语义（应按 index 拼接原文而非按键合并字典）。
