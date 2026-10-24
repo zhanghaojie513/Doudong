@@ -30,7 +30,8 @@ public sealed class LoopAgentRuntime(
 
         // 屏障 1：用户输入必须在任何模型调用之前提交。
         // 提交失败即停止——不继续、不降级、不假装成功。
-        if (await CommitOrNullAsync(StoreRecordKind.UserInput, request.UserInput, cancellationToken)
+        if (await CommitOrNullAsync(StoreRecordKind.UserInput,
+                    JsonSerializer.SerializeToElement(request.UserInput), cancellationToken)
                 is { } inputFailure)
         {
             yield return inputFailure;
@@ -39,7 +40,7 @@ public sealed class LoopAgentRuntime(
 
         var history = new List<ChatMessage>();
         foreach (var message in request.History)
-            history.Add(new ChatMessage(ToRole(message.Role), message.Content));
+            history.Add(ToChatMessage(message));
         history.Add(new ChatMessage(ChatRole.User, request.UserInput));
 
         for (var round = 0; round < request.MaxToolRounds; round++)
@@ -219,12 +220,20 @@ public sealed class LoopAgentRuntime(
 
             // 屏障 2：完整模型响应（含工具调用请求）必须在任何派发之前提交。
             // 这是"先提交调用意图、再产生副作用"的核心。
+            // 参数必须入库：只记 id 与工具名的话，恢复出的历史无法重新表达调用，
+            // resume 之后的第一轮请求就会缺参数。
             var responsePayload = JsonSerializer.Serialize(new
             {
                 text = text.ToString(),
-                calls = calls.Select(c => new { id = c.Id, tool = c.ToolId }),
+                reasoning = reasoning.ToString(),
+                calls = calls.Select(c => new
+                {
+                    id = c.Id,
+                    tool = c.ToolId,
+                    arguments = ParseArguments(c),
+                }),
             });
-            if (await CommitOrNullAsync(StoreRecordKind.ModelResponse, responsePayload, cancellationToken)
+            if (await CommitOrNullAsync(StoreRecordKind.ModelResponse, ToElement(responsePayload), cancellationToken)
                     is { } responseFailure)
             {
                 yield return responseFailure;
@@ -242,7 +251,7 @@ public sealed class LoopAgentRuntime(
 
                 // 屏障 3：工具开始记录必须落盘，才允许执行（可能产生副作用）。
                 var startedPayload = JsonSerializer.Serialize(new { id = call.Id, tool = call.ToolId });
-                if (await CommitOrNullAsync(StoreRecordKind.ToolCallStarted, startedPayload, cancellationToken)
+                if (await CommitOrNullAsync(StoreRecordKind.ToolCallStarted, ToElement(startedPayload), cancellationToken)
                         is { } startedFailure)
                 {
                     // 未提交则绝不执行；该调用保持"未开始"语义。
@@ -254,13 +263,19 @@ public sealed class LoopAgentRuntime(
                 var result = await dispatcher.DispatchAsync(invocation, cancellationToken);
 
                 // 屏障 4：终态也要提交，否则恢复时无法判断副作用是否发生。
+                // 结果内容同样入库：恢复出的 tool 消息必须有内容，
+                // 空内容会让模型以为工具什么也没做。
                 var completedPayload = JsonSerializer.Serialize(new
                 {
                     id = call.Id,
                     tool = call.ToolId,
                     outcome = result.Outcome.ToString(),
+                    diagnostic = result.Diagnostic,
+                    content = result.Result?.Content.ValueKind is JsonValueKind.Undefined or null
+                        ? null
+                        : result.Result.Content.GetRawText(),
                 });
-                if (await CommitOrNullAsync(StoreRecordKind.ToolCallCompleted, completedPayload, cancellationToken)
+                if (await CommitOrNullAsync(StoreRecordKind.ToolCallCompleted, ToElement(completedPayload), cancellationToken)
                         is { } completedFailure)
                 {
                     yield return new AgentEvent.ToolCallCompleted(result);
@@ -345,15 +360,14 @@ public sealed class LoopAgentRuntime(
     /// 未配置存储时视为"无持久化要求"，直接放行（仅用于对比与测试）。
     /// </summary>
     private async ValueTask<AgentEvent.RunFinished?> CommitOrNullAsync(
-        StoreRecordKind kind, string payload, CancellationToken cancellationToken)
+        StoreRecordKind kind, JsonElement payload, CancellationToken cancellationToken)
     {
         if (store is null) return null;
 
-        using var document = JsonDocument.Parse(JsonSerializer.Serialize(payload));
         try
         {
             await store.CommitAsync(
-                new StoreRecord(0, kind, document.RootElement.Clone()),
+                new StoreRecord(0, kind, payload),
                 cancellationToken).ConfigureAwait(false);
             return null;
         }
@@ -366,6 +380,15 @@ public sealed class LoopAgentRuntime(
         }
     }
 
+    /// <summary>
+    /// 把已序列化的 JSON 文本变成独立拥有的元素。
+    /// 早期实现用 <c>JsonSerializer.Serialize(string)</c> 再包一层，
+    /// 把 JSON 变成字符串字面量存进日志，恢复时必须先解开一层才能读。
+    /// 那是双重编码，不是格式设计；这里直接按结构存。
+    /// </summary>
+    private static JsonElement ToElement(string json) =>
+        JsonDocument.Parse(json).RootElement.Clone();
+
     private static ChatRole ToRole(AgentRole role) => role switch
     {
         AgentRole.System => ChatRole.System,
@@ -373,6 +396,57 @@ public sealed class LoopAgentRuntime(
         AgentRole.Tool => ChatRole.Tool,
         _ => ChatRole.User,
     };
+
+    /// <summary>
+    /// 把已提交历史还原成协议消息。
+    /// </summary>
+    /// <remarks>
+    /// 工具交互不能退化成扁平文本：assistant 的 <c>tool_calls</c> 与 tool 的
+    /// <c>tool_call_id</c> 是配对的协议结构，缺任一侧 provider 都会拒掉整轮。
+    /// 恢复出来的历史必须与运行时写的形状一致，否则"能恢复"只是看起来能。
+    /// </remarks>
+    private static ChatMessage ToChatMessage(AgentMessage message)
+    {
+        var role = ToRole(message.Role);
+
+        if (role == ChatRole.Assistant && message.ToolCalls.Count > 0)
+        {
+            var contents = new List<AIContent>();
+            if (message.Content is { Length: > 0 } text) contents.Add(new TextContent(text));
+            foreach (var call in message.ToolCalls)
+            {
+                contents.Add(new FunctionCallContent(
+                    call.InvocationId, call.ToolId,
+                    call.Arguments.ValueKind is JsonValueKind.Object
+                        ? call.Arguments.EnumerateObject()
+                            .ToDictionary(p => p.Name, p => (object?)p.Value.Clone())
+                        : null));
+            }
+
+            return new ChatMessage(role, contents);
+        }
+
+        if (role == ChatRole.Tool)
+        {
+            var properties = new AdditionalPropertiesDictionary { ["name"] = message.ToolId };
+            if (message.ToolCallId is { Length: > 0 } callId)
+                properties["tool_call_id"] = callId;
+
+            return new ChatMessage(role, message.Content)
+            {
+                Contents =
+                [
+                    new TextContent(message.Content),
+                    .. message.ToolCallId is { Length: > 0 } id
+                        ? new AIContent[] { new FunctionResultContent(id, message.Content) }
+                        : [],
+                ],
+                AdditionalProperties = properties,
+            };
+        }
+
+        return new ChatMessage(role, message.Content);
+    }
 
     private sealed record PendingCall(
         string Id,

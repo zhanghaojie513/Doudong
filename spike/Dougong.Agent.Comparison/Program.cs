@@ -36,6 +36,9 @@ public static class Program
         if (args.FirstOrDefault() == "wire")
             return await WireFormatChecks.RunAsync();
 
+        if (args.FirstOrDefault() == "session")
+            return await SessionChecks.RunAsync();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 

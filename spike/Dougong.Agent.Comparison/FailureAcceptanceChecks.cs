@@ -223,8 +223,11 @@ public static class FailureAcceptanceChecks
 
     private static StoreRecord Record(StoreRecordKind kind, string payload)
     {
-        using var document = JsonDocument.Parse(JsonSerializer.Serialize(payload));
-        return new StoreRecord(0, kind, document.RootElement.Clone());
+        // 已经是 JSON 的按结构存，纯文本按字符串存——与运行时写入一致。
+        JsonElement element;
+        try { element = JsonDocument.Parse(payload).RootElement.Clone(); }
+        catch (JsonException) { element = JsonSerializer.SerializeToElement(payload); }
+        return new StoreRecord(0, kind, element);
     }
 
     private static ToolInvocation Invocation(string id, IAgentTool tool)

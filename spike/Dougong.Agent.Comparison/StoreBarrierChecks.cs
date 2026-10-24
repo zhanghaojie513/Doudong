@@ -173,8 +173,11 @@ public static class StoreBarrierChecks
 
     private static async Task CommitAsync(IAgentStore store, StoreRecordKind kind, string payload)
     {
-        using var document = JsonDocument.Parse(JsonSerializer.Serialize(payload));
-        await store.CommitAsync(new StoreRecord(0, kind, document.RootElement.Clone()));
+        // 已经是 JSON 的按结构存，纯文本按字符串存——与运行时写入一致。
+        JsonElement element;
+        try { element = JsonDocument.Parse(payload).RootElement.Clone(); }
+        catch (JsonException) { element = JsonSerializer.SerializeToElement(payload); }
+        await store.CommitAsync(new StoreRecord(0, kind, element));
     }
 
     private static async Task<IReadOnlyList<AgentEvent>> CollectAsync(

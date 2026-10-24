@@ -42,7 +42,7 @@ Dougong 目前处于 **实验性 Alpha 阶段**，目标框架为 `net10.0`。
 - `Dougong.Agent` 已实现循环、提交屏障、审批、资源协调、文件版本复核与上下文压缩
 - `Dougong.Ai` 已实现三种线协议连接器与 `ChatClientFactory`
 - `Dougong.Mcp`、`Dougong.Acp` 仍是骨架（M2）
-- `Dougong.Cli` 是可运行宿主：REPL + 审批 + 工作区内读写 + JSONL 会话
+- `Dougong.Cli` 是可运行宿主：REPL + 审批 + 工作区内读写 + JSONL 会话，支持 resume / branch / list
 
 ## 为什么是 Dougong
 
@@ -99,7 +99,7 @@ Dougong 关注的是 Agent 的**承托层**，而不是某一个模型或某一�
 | `Dougong.Ai` | 三种线协议连接器、`ChatClientFactory` | M1 已实现，用量记账未做 |
 | `Dougong.Mcp` | MCP Server 与 Agent 工具桥接 | 骨架（M2） |
 | `Dougong.Acp` | ACP Agent 端适配 | 骨架（M2） |
-| `Dougong.Cli` | headless 参考宿主 | 可运行，三种协议可选 |
+| `Dougong.Cli` | headless 参考宿主 | 可运行，三种协议、会话恢复与分支 |
 | `Dougong.Telemetry` | OpenTelemetry 桥接 | 规划中 |
 
 ## 快速开始
