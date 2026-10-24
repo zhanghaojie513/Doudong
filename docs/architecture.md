@@ -1,6 +1,6 @@
 # Dougong 架构
 
-> 本文回答"系统长什么样、怎么运转"。为什么这样设计见 [philosophy.md](vision/philosophy.md)；里程碑、命名与待定决策见 [design.md](design.md)。
+> 本文回答"系统长什么样、怎么运转"。**最终目的与达成判定见 [goal.md](goal.md)，完成定义见 [quality-gates.md](quality-gates.md)**；为什么这样设计见 [philosophy.md](vision/philosophy.md)；里程碑、命名与待定决策见 [design.md](design.md)。
 > 对应 design v1（2026-10-22）。全部包名 `Dougong.*`，目标框架 `net10.0`。
 
 ---

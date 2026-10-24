@@ -1,7 +1,7 @@
 # Dougong（斗拱）设计方案 v1 — 给 .NET 生态一个插件化 Agent Harness（路线 B）
 
 > **状态**：设计稿 v1，2026-10-22（同日定名 **Dougong／斗拱**，见 §11）
-> **文档体系**：本文是总体方案（生态位 / 里程碑 / 决策 / 双轨计划）；"为什么这样设计"见 [philosophy.md](vision/philosophy.md)，"系统长什么样、怎么运转"见 [architecture.md](architecture.md)，旗舰特性 Skill 自动进化见 [skills-evolution.md](vision/skills-evolution.md)，外部前沿事实见 [frontier-roadmap.md](vision/frontier-roadmap.md)，M3 之后的内部迭代排序见 [iteration-roadmap.md](vision/iteration-roadmap.md)。
+> **文档体系**：**最终目的与达成判定见 [goal.md](goal.md)，完成定义见 [quality-gates.md](quality-gates.md)**；本文是总体方案（生态位 / 里程碑 / 决策 / 双轨计划）；"为什么这样设计"见 [philosophy.md](vision/philosophy.md)，"系统长什么样、怎么运转"见 [architecture.md](architecture.md)，"下一步做什么"见 [plan.md](plan.md)，"做到哪了"见 [status.md](status.md)，旗舰特性 Skill 自动进化见 [skills-evolution.md](vision/skills-evolution.md)，外部前沿事实见 [frontier-roadmap.md](vision/frontier-roadmap.md)，M3 之后的内部迭代排序见 [iteration-roadmap.md](vision/iteration-roadmap.md)。
 > **定位**：以 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的 "Everything is a Plugin" 为架构参照，在 .NET 上**原生实现**一个插件化 Agent Harness SDK——借思想，不移植代码。
 > **名字**：斗拱 = 标准化构件逐层装配、承托整体屋檐的千年木构系统——"一切皆插件"的建筑版。内核是承托层，插件是斗拱件。
 > **上游决策**：底座决定（M.E.AI + MCP 官方 SDK、不自研 provider、不移植 Cordis）见 Obsidian《Dougong-Desktop-桌面端开发方案.md》§3.2（2026-10-22 修订，2026-10-23 该文档定案为桌面端正式方案）。

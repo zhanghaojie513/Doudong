@@ -127,7 +127,7 @@ dotnet test Dougong.slnx -c Release --no-build
 
 ```bash
 # 确定性自检套件（不联网）
-for m in wire session contract store approval fileversion compaction failure shell usage; do
+for m in reachability wiring approval-log wire session usage shell \n         failure store approval fileversion compaction contract; do
   dotnet run --project spike/Dougong.Agent.Comparison -c Release --no-build -- $m
 done
 ```
@@ -151,7 +151,9 @@ dotnet pack Dougong.slnx -c Release --output ./artifacts/packages
 | [实施状态](docs/status.md) | 已实现内容、测试基线、未完成验收和恢复入口 |
 | [M1 候选对比](docs/m1-candidate-comparison.md) | MAF 包装与自研循环的同用例对比、版本与选择理由 |
 | [M0 开发历程](docs/journey/m0-dev-journey.md) | M0 期间真实发生的问题与判断错误，供开发记录梳理 |
-| [开发计划](docs/plan.md) | 里程碑顺序、缺口台账与判定标准；防跑偏用 |
+| [最终目的](docs/goal.md) | 四条不可让渡的性质、反目标与可执行的达成判定 |
+| [完成定义](docs/quality-gates.md) | 六道质量门、红线、按规模裁剪 |
+| [开发计划](docs/plan.md) | 里程碑顺序、缺口台账；防跑偏用 |
 | [M1 开发历程](docs/journey/m1-dev-journey.md) | M1 期间的实现缺陷、测试缺陷与判断错误；含真实 provider 才暴露的协议问题 |
 | [设计理念](docs/vision/philosophy.md) | 斗拱隐喻、设计原则和明确不做的事情 |
 | [前沿调查](docs/vision/frontier-roadmap.md) | Agent Harness、协议、隔离和记忆评测的公开进展 |

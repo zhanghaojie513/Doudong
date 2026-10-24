@@ -51,6 +51,9 @@ public static class Program
         if (args.FirstOrDefault() == "approval-log")
             return await ApprovalPersistenceChecks.RunAsync();
 
+        if (args.FirstOrDefault() == "reachability")
+            return ReachabilityChecks.Run();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 

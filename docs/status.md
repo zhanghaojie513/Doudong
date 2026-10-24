@@ -11,6 +11,9 @@
 - 首个提交 `5c1bbe5` 及后续切片均已推送至 [GitHub 仓库](https://github.com/zhanghaojie513/Doudong)。
 - [前沿调查](vision/frontier-roadmap.md)与[未来迭代路线](vision/iteration-roadmap.md)已建立；后者面向 M3 之后，不作为当前 M0 已完成的证据。
 - M0 期间的实现缺陷、测试缺陷与判断错误已整理到[开发历程素材](journey/m0-dev-journey.md)，M1 的同类素材见 [m1-dev-journey.md](journey/m1-dev-journey.md)；这两份文件不是验收依据。
+- 本文只回答"做到了哪一步"。**要达成什么**见 [goal.md](goal.md)，**什么算做完**见
+  [quality-gates.md](quality-gates.md)，**下一步做什么**见 [plan.md](plan.md)。
+  勾选任一项前，先确认它过了 [quality-gates.md](quality-gates.md) 的六道门。
 
 ## 评审修订清单
 
@@ -259,6 +262,17 @@
 - xUnit v3 的 `xUnit1051`（建议统一传 `TestContext.Current.CancellationToken`）在
   `.editorconfig` 中降级为建议：内核测试大量 await 的是引擎内部的取消路径，
   统一塞入测试级令牌会把"取消是否被正确传播"与"测试是否超时"混在一起。
+
+## 与 goal.md 的对应（2026-10-24）
+
+四条性质当前状态（详细判定见 [goal.md](goal.md) §4、§6）：
+
+| 性质 | 状态 | 依据 |
+|---|---|---|
+| P1 可组合 | 部分 | 依赖方向有守卫、内核零第三方依赖；插件生态与可替换性验收未做（M3） |
+| P2 完整生命周期 | 基本达成 | 157 项测试 + 20 项对抗探针；断电级持久化未声明 |
+| P3 故障可解释 | 基本达成 | 四个提交屏障 + 审批记录 + 未知结果对账；缺工具幂等键 |
+| P4 真实可用 | 部分 | 3 协议 + 真实编码任务 + 压缩 + 恢复；MCP/ACP 未接入 |
 
 ## 约定
 
