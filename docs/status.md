@@ -138,14 +138,26 @@
     分支式压缩、按真实 token 计数校准。
   - **明确保留的近似**：token 按 2 字符/token 估算，不是 provider 真实计数；
     阈值必须保守使用，不宣称精确。
-- [ ] 真实编码任务与 CLI 构建/打包通过；模型/工具代码实际接入后再记录已验证能力。
+- [x] 真实编码任务与 CLI 构建/打包通过；模型/工具代码实际接入后再记录已验证能力。
   - 真实编码任务已通过（六个 provider，含写文件与内容校验）。
+  - **Ai 层落地**（`src/Dougong.Ai`）：三种线协议各自独立实现（`OpenAiChatCompletionsFormat`、
+    `OpenAiResponsesFormat`、`AnthropicMessagesFormat`），共用 `HttpClientChatClient` 传输；
+    `ChatClientFactory` 按具名配置建连接器，密钥只从环境变量读。
+    CLI 与真实 provider 对比都已切到这一套，spike 里的一次性适配器与 CLI 自带连接器已删除。
+  - 10 项线格式自检（`-- wire`）覆盖三种协议的请求形状、流解码与**多轮回填**：
+    Anthropic 的 `tool_result` block、/responses 的 `function_call_output` 条目此前从未被构造过。
+  - 三协议真实端点复验（DeepSeek `deepseek-flash`，各 5/5）：chat-completions、Anthropic 兼容层、/responses。
   - CLI 已接入（`src/Dougong.Cli`）：REPL + 控制台审批 + 工作区内 read_file/write_file
-    + JSONL 会话 + 完整提交屏障。已用 DeepSeek 端到端验证：模型请求调用 → 控制台审批 →
-    执行写入 → 回传结果 → 模型给出结论。
-  - 修复的两个真实协议缺陷：工具结果回填缺 `tool_call_id`（provider 422）、
-    DeepSeek 思考模式要求回传 `reasoning_content`（provider 400）。
-  - **未实现**：多会话、会话 resume/branch、CLI 参数化 provider 配置、shell 工具。
+    + JSONL 会话 + 完整提交屏障 + 三种协议可选。已用 DeepSeek 端到端验证：模型请求调用 →
+    控制台审批 → 执行读取 → 真实内容回填 → 模型给出正确结论。
+  - **本轮修掉的四个真实缺陷**：
+    1. `finish_reason` 被从 `delta` 里读，实际是 `choices[0]` 的兄弟字段——主路径从未命中，
+       一直靠流结束兜底掩盖（反证：改回后 `-- wire` 立刻失败）。
+    2. 工具结果消息只放 `FunctionResultContent`，而 `ChatMessage.Text` 由 `Contents` 派生，
+       于是三种协议拿到的工具结果都是空字符串，模型回答"没有返回任何东西"（反证已确认）。
+    3. 文本与 `tool_calls` 被拆成两条相邻 assistant 消息，思考模式 provider 因此拒掉整轮（实测 400）。
+    4. 审批被拒绝后同样触发第 3 条：拒绝也必须留下可解释的历史。
+  - **未实现**：多会话、会话 resume/branch、shell 工具、用量成本记账（§5.1 的 OTel 聚合）。
 
 ## 桌面恢复与重连（设计已修订，未实现）
 
@@ -205,6 +217,12 @@
   9 项自检通过（含反证）；等待审批期间不持锁，避免慢审批阻塞工作区。
 - 2026-10-24：M1 提交屏障：`IAgentStore` 契约与 JSONL 实现，四个提交落点串起
   "先提交意图、再产生副作用"；6 项自检通过，并用移除屏障的反证确认测试有效。
+- 2026-10-24：M1 Ai 层：三种线协议拆成可独立校验的实现，共用 HTTP 传输与 `ChatClientFactory`；
+  一次性适配器与 CLI 自带连接器删除，真实 provider 证据落在交付代码上。
+  10 项线格式自检（`-- wire`）首次覆盖多轮回填；三协议真实端点各 5/5。
+  期间修掉四个真实缺陷：`finish_reason` 读错字段（一直被兜底掩盖）、工具结果 Text 为空、
+  文本与 tool_calls 拆成两条消息导致 400、审批拒绝后同样触发。四项均有反证或真实复现。
+
 - 2026-10-24：M1 故障验收：补 6 项故障用例（同文件并发编辑、读写竞争、取消不合作、单一执行入口、
   提交失败先于副作用、崩溃窗口报未知结果），重复 5 轮全绿。该套件当场抓到一个真实缺陷——
   `Serial` 与 `WorkspaceExclusive` 原本各用一把独立信号量，串行工具能与同工作区独占工具重叠执行；

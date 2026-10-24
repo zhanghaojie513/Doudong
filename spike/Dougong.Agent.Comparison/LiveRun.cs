@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Dougong.Agent;
+using Dougong.Ai;
 using Microsoft.Extensions.AI;
 
 namespace Dougong.Agent.Comparison;
@@ -217,19 +218,25 @@ public static class LiveRun
     }
 
     /// <summary>
-    /// 按协议选择连接器。两者实现同一 <see cref="IChatClient"/>，
-    /// 因此被比较的始终是 Dougong 的循环，而不是连接器差异。
+    /// 按协议选择连接器。用的是 <c>Dougong.Ai</c> 的正式工厂，不是一次性适配器：
+    /// 这样真实 provider 的证据落在交付代码上，而不是探针上。
+    /// 三者都实现同一 <see cref="IChatClient"/>，因此被比较的始终是循环，不是连接器差异。
     /// </summary>
     private static IChatClient CreateClient(
         string baseUrl, string apiKey, string model, string protocol) =>
-        protocol.ToLowerInvariant() switch
+        ChatClientFactory.Create(new ChatProviderConfig
         {
-            "anthropic" => new AnthropicMessagesChatClient(
-                baseUrl, apiKey, model,
-                Environment.GetEnvironmentVariable("DOUGONG_ANTHROPIC_PATH") ?? "/v1/messages"),
-            "responses" => new ResponsesChatClient(baseUrl, apiKey, model),
-            _ => new OpenAiCompatibleChatClient(baseUrl, apiKey, model),
-        };
+            Name = "live",
+            BaseUrl = baseUrl,
+            Model = model,
+            Protocol = protocol.ToLowerInvariant() switch
+            {
+                "anthropic" => ChatProtocol.AnthropicMessages,
+                "responses" => ChatProtocol.OpenAiResponses,
+                _ => ChatProtocol.OpenAiChatCompletions,
+            },
+            MessagesPath = Environment.GetEnvironmentVariable("DOUGONG_ANTHROPIC_PATH"),
+        }, apiKey);
 
     private static async Task<IReadOnlyList<AgentEvent>> CollectAsync(
         IAgentRuntime runtime, string input)

@@ -270,10 +270,14 @@ message_delta  stop_reason: tool_use
 
 ## 7. 尚未验证的部分（必须如实记录）
 
-- **审批与资源锁未实现**。当前 dispatcher 只做 schema 最小校验、调用 ID 去重、权限描述采集和终态记录。审批绑定、工作区独占、执行前文件版本复核均未实现，因此**不能宣称具备"批准 A 执行 B"的防护**。
-- **JSON schema 校验是最小子集**（顶层 `type` 与 `required`），不是完整校验器。
-- **未测持久化与提交屏障**，属于后续切片。
-- **只测了两家 OpenAI 兼容端点**，未覆盖 Anthropic 原生协议、多模态输入、并行工具调用。
+> 本节写于候选对比当时。后续切片已补齐审批、资源锁、提交屏障、文件版本复核、
+> 上下文压缩与三种线协议；当前状态以 [status.md](status.md) 为准。
+
+- ~~审批与资源锁未实现~~ → 已实现（`-- approval` 9 项、`-- failure` 6 项，含反证）。
+- **JSON schema 校验仍是最小子集**（顶层 `type` 与 `required`），不是完整校验器。
+- ~~未测持久化与提交屏障~~ → 已实现（`-- store` 6 项，含反证）。
+- ~~只测 OpenAI 兼容端点~~ → 三种协议均已实现并做确定性校验（`-- wire` 10 项）；
+  仍**未覆盖**多模态输入与同批并行工具执行的性能特征。
 
 ## 8. 复现方式
 
@@ -291,9 +295,22 @@ export DOUGONG_PROVIDER_MODEL=mimo-v2.6-flash
 dotnet run --project spike/Dougong.Agent.Comparison -c Release --no-build -- live
 ```
 
+其余自检入口（都是确定性场景，无需网络）：
+
+```bash
+for m in wire contract store approval fileversion compaction failure; do
+  dotnet run --project spike/Dougong.Agent.Comparison -c Release --no-build -- $m
+done
+```
+
 假模型的三个候选共享同一 `ScriptedChatClient`、`FakeTool`、`ContractHarness`，差异只可能来自运行时实现。
-真实 provider 使用 `OpenAiCompatibleChatClient`（最小适配器，非 `Dougong.Ai` 正式连接器），
-它在连接器层完成片段拼接，与循环边界清晰分离。
+真实 provider 现在使用 `Dougong.Ai` 的正式连接器（`ChatClientFactory`），
+片段拼接在协议层完成，与循环边界清晰分离。对比当时用的是一次性适配器，
+已删除——真实 provider 的证据现在落在交付代码上。
+
+三种协议都跑同一套 `live` 就够：
+`DOUGONG_PROVIDER_PROTOCOL=openai`（默认）/ `anthropic` / `responses`；
+Anthropic 兼容层路径非默认时另设 `DOUGONG_ANTHROPIC_PATH`（Git Bash 下需要 `MSYS_NO_PATHCONV=1`）。
 
 ## 9. 结论对后续的含义
 

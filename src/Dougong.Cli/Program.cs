@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Dougong.Agent;
+using Dougong.Ai;
 
 namespace Dougong.Cli;
 
@@ -11,6 +12,8 @@ namespace Dougong.Cli;
 /// 环境变量：
 /// <list type="bullet">
 /// <item><c>DOUGONG_PROVIDER_BASE</c>、<c>DOUGONG_PROVIDER_KEY</c>、<c>DOUGONG_PROVIDER_MODEL</c> 必填</item>
+/// <item><c>DOUGONG_PROVIDER_PROTOCOL</c> 可选：<c>openai</c>（默认）/ <c>anthropic</c> / <c>responses</c></item>
+/// <item><c>DOUGONG_ANTHROPIC_PATH</c> 可选：Anthropic 兼容层路径，默认 <c>/v1/messages</c></item>
 /// <item><c>DOUGONG_WORKSPACE</c> 可选，默认当前目录</item>
 /// <item><c>DOUGONG_SESSION_DIR</c> 可选，默认 ~/.dougong/sessions</item>
 /// </list>
@@ -20,22 +23,23 @@ public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
-        var baseUrl = Environment.GetEnvironmentVariable("DOUGONG_PROVIDER_BASE");
-        var apiKey = Environment.GetEnvironmentVariable("DOUGONG_PROVIDER_KEY");
-        var model = Environment.GetEnvironmentVariable("DOUGONG_PROVIDER_MODEL");
-
         if (args.Contains("--version") || args.Contains("-v"))
         {
             Console.WriteLine("dougong 0.1.0-alpha.1");
             return 0;
         }
 
-        if (string.IsNullOrWhiteSpace(baseUrl)
-            || string.IsNullOrWhiteSpace(apiKey)
-            || string.IsNullOrWhiteSpace(model))
+        var config = ChatClientFactory.FromEnvironment();
+        if (config is null)
         {
             Console.Error.WriteLine(
                 "缺少 provider 配置。请设置 DOUGONG_PROVIDER_BASE / KEY / MODEL 环境变量。");
+            return 2;
+        }
+
+        if (Environment.GetEnvironmentVariable("DOUGONG_PROVIDER_KEY") is not { Length: > 0 })
+        {
+            Console.Error.WriteLine("缺少 DOUGONG_PROVIDER_KEY 环境变量。");
             return 2;
         }
 
@@ -48,7 +52,7 @@ public static class Program
         var sessionId = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss");
         var sessionPath = Path.Combine(sessionDir, $"{sessionId}.jsonl");
 
-        Console.WriteLine($"dougong 0.1.0-alpha.1  模型={model}");
+        Console.WriteLine($"dougong 0.1.0-alpha.1  模型={config.Model}  协议={config.Protocol}");
         Console.WriteLine($"工作区={workspace}");
         Console.WriteLine($"会话={sessionPath}");
         Console.WriteLine("输入 /exit 退出，/help 查看命令。");
@@ -56,7 +60,7 @@ public static class Program
 
         await using var store = await JsonlAgentStore.OpenAsync(sessionPath, sessionId)
             .ConfigureAwait(false);
-        using var client = new OpenAiChatClient(baseUrl, apiKey, model);
+        using var client = ChatClientFactory.Create(config);
         var dispatcher = new ToolDispatcher(
             new ConsoleApprover(),
             new ToolResourceGate(),

@@ -35,8 +35,10 @@ Dougong 目前处于 **实验性 Alpha 阶段**，目标框架为 `net10.0`。
 - 1 个内核测试工程
 - 3 个样例工程：基础插件、契约插件、共享契约
 - `Dougong.Telemetry` 尚未创建
-- `Dougong.Agent`、`Dougong.Ai`、`Dougong.Mcp`、`Dougong.Acp` 仍处于骨架阶段
-- `Dougong.Cli` 仍是占位宿主，尚不能直接运行 AI 编程任务
+- `Dougong.Agent` 已实现循环、提交屏障、审批、资源协调、文件版本复核与上下文压缩
+- `Dougong.Ai` 已实现三种线协议连接器与 `ChatClientFactory`
+- `Dougong.Mcp`、`Dougong.Acp` 仍是骨架（M2）
+- `Dougong.Cli` 是可运行宿主：REPL + 审批 + 工作区内读写 + JSONL 会话
 
 ## 为什么是 Dougong
 
@@ -88,12 +90,12 @@ Dougong 关注的是 Agent 的**承托层**，而不是某一个模型或某一�
 
 | 包 | 当前定位 | 状态 |
 |---|---|---|
-| `Dougong.Kernel` | 生命周期、服务、事件、依赖图、动态加载 | 核心实现，M0 审核中 |
-| `Dougong.Agent` | Agent 运行契约、循环、会话、工具和审批 | 骨架 |
-| `Dougong.Ai` | `IChatClient` 工厂、模型路由和用量记账 | 骨架 |
-| `Dougong.Mcp` | MCP Server 与 Agent 工具桥接 | 骨架 |
-| `Dougong.Acp` | ACP Agent 端适配 | 骨架 |
-| `Dougong.Cli` | headless 参考宿主 | 占位实现 |
+| `Dougong.Kernel` | 生命周期、服务、事件、依赖图、动态加载 | M0 已关闭（156 测试 + 13 探测） |
+| `Dougong.Agent` | Agent 运行契约、循环、会话、工具和审批 | M1 主体已实现 |
+| `Dougong.Ai` | 三种线协议连接器、`ChatClientFactory` | M1 已实现，用量记账未做 |
+| `Dougong.Mcp` | MCP Server 与 Agent 工具桥接 | 骨架（M2） |
+| `Dougong.Acp` | ACP Agent 端适配 | 骨架（M2） |
+| `Dougong.Cli` | headless 参考宿主 | 可运行，三种协议可选 |
 | `Dougong.Telemetry` | OpenTelemetry 桥接 | 规划中 |
 
 ## 快速开始

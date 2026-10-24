@@ -161,16 +161,22 @@ public sealed class LoopAgentRuntime(
                 }
             }
 
-            if (text.Length > 0)
-                history.Add(new ChatMessage(ChatRole.Assistant, text.ToString())
-                {
-                    AdditionalProperties = reasoning.Length > 0
-                        ? new AdditionalPropertiesDictionary { ["reasoning_content"] = reasoning.ToString() }
-                        : null,
-                });
-
             if (calls.Count == 0)
             {
+                // 纯文本轮次才单独补 assistant 消息。
+                // 有工具调用时，文本必须与 tool_calls 合进同一条 assistant 消息：
+                // 分开写会得到两条相邻的 assistant 消息，思考模式的 provider
+                // 会认为带 tool_calls 的那条缺少 reasoning_content 而拒掉整轮（实测 400）。
+                if (text.Length > 0)
+                {
+                    history.Add(new ChatMessage(ChatRole.Assistant, text.ToString())
+                    {
+                        AdditionalProperties = reasoning.Length > 0
+                            ? new AdditionalPropertiesDictionary { ["reasoning_content"] = reasoning.ToString() }
+                            : null,
+                    });
+                }
+
                 yield return new AgentEvent.RunFinished(AgentRunOutcome.Completed);
                 yield break;
             }
@@ -274,7 +280,7 @@ public sealed class LoopAgentRuntime(
 
             // 回填必须符合协议：assistant 消息携带 tool_calls，每条 tool 结果带 tool_call_id。
             // 早期实现把结果压成一条普通 Tool 文本，缺 tool_call_id 会被 provider 拒绝（422）。
-            AppendToolExchange(history, calls, toolResults, reasoning.ToString());
+            AppendToolExchange(history, calls, toolResults, text.ToString(), reasoning.ToString());
         }
 
         yield return new AgentEvent.RunFinished(AgentRunOutcome.ToolRoundLimitReached);
@@ -288,6 +294,7 @@ public sealed class LoopAgentRuntime(
         List<ChatMessage> history,
         IReadOnlyList<PendingCall> calls,
         IReadOnlyList<(string Id, string ToolId, ToolDispatchResult Result)> results,
+        string text,
         string reasoning)
     {
         var toolCalls = new List<AIContent>();
@@ -300,6 +307,11 @@ public sealed class LoopAgentRuntime(
                     ? element.EnumerateObject().ToDictionary(p => p.Name, p => (object?)p.Value.Clone())
                     : null));
         }
+
+        // 本轮的文本与 tool_calls 必须是同一条 assistant 消息：
+        // 拆成两条会让带 tool_calls 的那条失去上下文的连续性，
+        // 思考模式的 provider 会因此拒掉整轮请求。
+        if (text.Length > 0) toolCalls.Insert(0, new TextContent(text));
 
         history.Add(new ChatMessage(ChatRole.Assistant, toolCalls)
         {
@@ -316,7 +328,9 @@ public sealed class LoopAgentRuntime(
 
             history.Add(new ChatMessage(ChatRole.Tool, content)
             {
-                Contents = [new FunctionResultContent(id, content)],
+                // TextContent 必须在 Contents 里：ChatMessage.Text 由 Contents 派生，
+                // 只放 FunctionResultContent 会让 Text 变空，三种协议拿到的工具结果都是空字符串。
+                Contents = [new TextContent(content), new FunctionResultContent(id, content)],
                 AdditionalProperties = new AdditionalPropertiesDictionary
                 {
                     ["tool_call_id"] = id,

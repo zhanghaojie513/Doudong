@@ -33,6 +33,9 @@ public static class Program
         if (args.FirstOrDefault() == "failure")
             return await FailureAcceptanceChecks.RunAsync();
 
+        if (args.FirstOrDefault() == "wire")
+            return await WireFormatChecks.RunAsync();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 

@@ -287,7 +287,9 @@ public sealed record AgentToolResult(JsonElement Content, JsonElement? Details =
 ### 5.1 Ai 层（Dougong.Ai）
 
 - `ChatClientFactory`：按命名配置（provider / endpoint / model / key 来源）建 `IChatClient`；官方与社区 M.E.AI 连接器即插即用；DeepSeek 走 OpenAI 兼容端点。
-- 用量/成本记账：per-session / per-day 聚合 → OTel 指标 + 事件总线。
+- **协议是显式维度**（M1 已实现）：同一 provider 可能同时提供 chat-completions、`/responses` 与 Anthropic `/v1/messages`，三者的工具声明形状、工具调用形状、参数片段字段、终结信号位置、system 提示位置都不同，因此各自独立实现、独立校验，共用同一份 HTTP 传输。工具结果回填与"文本与工具调用是否同一条消息"属于协议层责任，必须由确定性帧回放证明，不能只靠一次真实调用通过。
+- 密钥只从环境变量或宿主凭据通道读取，不进入配置文件与日志；配置对象只记录"从哪里取密钥"。
+- 用量/成本记账：per-session / per-day 聚合 → OTel 指标 + 事件总线。（未实现）
 - 逃生舱：`Dougong.Ai.Pi`（适配 pi.net 的 Pi.Ai，42 厂商 + OAuth 场景，M4 按需）。
 
 ### 5.2 Mcp 层（Dougong.Mcp）

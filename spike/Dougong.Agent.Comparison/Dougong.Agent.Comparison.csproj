@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Dougong.Agent\Dougong.Agent.csproj" />
+    <ProjectReference Include="..\..\src\Dougong.Ai\Dougong.Ai.csproj" />
   </ItemGroup>
 
 </Project>
