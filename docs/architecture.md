@@ -1,6 +1,6 @@
 # Dougong 架构
 
-> 本文回答"系统长什么样、怎么运转"。为什么这样设计见 [philosophy.md](philosophy.md)；里程碑、命名与待定决策见 [design.md](design.md)。
+> 本文回答"系统长什么样、怎么运转"。为什么这样设计见 [philosophy.md](vision/philosophy.md)；里程碑、命名与待定决策见 [design.md](design.md)。
 > 对应 design v1（2026-10-22）。全部包名 `Dougong.*`，目标框架 `net10.0`。
 
 ---
@@ -479,7 +479,7 @@ DeactivateAsync(P) → 串行协调变更 → 计算需求闭包
 | 新工具（Git、浏览器、数据库…） | `IAgentTool` 插件 |
 | 新模型接入 | M.E.AI 连接器 + `ChatClientFactory` 配置（不改代码） |
 | 新 MCP server | 配置声明连接，自动成为插件 |
-| 新技能（SKILL.md 知识包） | 技能加载器插件：技能目录本身作为工具、按需加载（见 [skills-evolution.md](skills-evolution.md)） |
+| 新技能（SKILL.md 知识包） | 技能加载器插件：技能目录本身作为工具、按需加载（见 [skills-evolution.md](vision/skills-evolution.md)） |
 | 审批交互（控制台/桌面/自动白名单） | 审批器插件 |
 | 会话存储后端（SQLite…） | 存储插件（默认 JSONL 插件） |
 | 宿主 UI | 实现 ACP Client（Dougong Desktop 是第一例） |

@@ -1,6 +1,6 @@
 # Dougong 设计理念
 
-> 本文回答“为什么这样设计”。技术契约见 [architecture.md](architecture.md)，总体决策与里程碑见 [design.md](design.md)，实际进度见 [status.md](status.md)。2026-10-23 技术评审修订；下述内容是设计目标，不是已实现能力清单。
+> 本文回答“为什么这样设计”。技术契约见 [architecture.md](../architecture.md)，总体决策与里程碑见 [design.md](../design.md)，实际进度见 [status.md](../status.md)。2026-10-23 技术评审修订；下述内容是设计目标，不是已实现能力清单。
 
 ## 1. 名字与定位
 

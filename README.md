@@ -125,17 +125,19 @@ dotnet pack Dougong.slnx -c Release --output ./artifacts/packages
 
 ## 文档
 
+> 全部文档的归类与阅读路径见 [docs/README.md](docs/README.md)。根目录是描述当前系统的契约与状态；`docs/vision/` 是方向与理念，不是已实现能力的承诺。
+
 | 文档 | 内容 |
 |---|---|
 | [架构](docs/architecture.md) | 分层结构、内核契约、状态机、动态加载和宿主边界 |
 | [总体设计](docs/design.md) | 生态位、里程碑、MAF 与自研循环的比较门槛 |
 | [实施状态](docs/status.md) | 已实现内容、测试基线、未完成验收和恢复入口 |
-| [设计理念](docs/philosophy.md) | 斗拱隐喻、设计原则和明确不做的事情 |
-| [前沿调查](docs/frontier-roadmap.md) | Agent Harness、协议、隔离和记忆评测的公开进展 |
-| [未来路线](docs/iteration-roadmap.md) | M3 之后的演进方向和退出条件 |
-| [Skill 演进](docs/skills-evolution.md) | 复盘、沉淀、审批和加载的 Skill 进化设想 |
-| [开发历程素材](docs/dev-journey.md) | M0 期间真实发生的问题与判断错误，供开发记录梳理 |
 | [M1 候选对比](docs/m1-candidate-comparison.md) | MAF 包装与自研循环的同用例对比、版本与选择理由 |
+| [M0 开发历程](docs/journey/m0-dev-journey.md) | M0 期间真实发生的问题与判断错误，供开发记录梳理 |
+| [设计理念](docs/vision/philosophy.md) | 斗拱隐喻、设计原则和明确不做的事情 |
+| [前沿调查](docs/vision/frontier-roadmap.md) | Agent Harness、协议、隔离和记忆评测的公开进展 |
+| [未来路线](docs/vision/iteration-roadmap.md) | M3 之后的演进方向和退出条件 |
+| [Skill 演进](docs/vision/skills-evolution.md) | 复盘、沉淀、审批和加载的 Skill 进化设想 |
 
 ## 路线图
 
