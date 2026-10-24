@@ -74,11 +74,59 @@ public sealed class KernelSharedContractMissingTests
         await kernel.DisposeAsync();
     }
 
+    /// <summary>
+    /// 回归：该契约即使已在宿主进程中、但未登记，插件也必须加载失败。
+    /// </summary>
+    /// <remarks>
+    /// 这条钉住"登记是加载前置条件"这一约束。真正要防的情形是：
+    /// 程序集既不在插件目录、又没登记，但宿主进程里恰好已有同名程序集，
+    /// 装配解析于是回落到默认 ALC 并静默绑定成功。
+    /// <para>
+    /// 这里的构造方式很关键：契约装进一个**独立可回收 ALC**，而不是
+    /// <c>Assembly.LoadFile</c>。后者会把它永久留在进程里，污染同族的其它用例
+    /// ——那正是 CI 上出现「本地全绿、CI 稳定失败」的原因。
+    /// 独立 ALC 既能把"进程里存在该程序集"这个前提造出来，又能在用例结束时卸载。
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Contract_present_in_process_but_unregistered_still_fails()
+    {
+        var context = new System.Runtime.Loader.AssemblyLoadContext(
+            $"contract-probe:{Guid.NewGuid():N}", isCollectible: true);
+        try
+        {
+            var loaded = context.LoadFromAssemblyPath(ContractAssemblyPath());
+            Assert.Equal(ContractAssemblyName, loaded.GetName().Name);
+
+            // 前提成立：该程序集此刻确实在这一进程内。
+            Assert.Contains(
+                AppDomain.CurrentDomain.GetAssemblies(),
+                a => string.Equals(
+                    a.GetName().Name, ContractAssemblyName, StringComparison.OrdinalIgnoreCase));
+
+            await using var kernel = new DougongKernel();
+
+            // 没有登记，必须失败——不能因为进程里恰好有同名程序集就放行。
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await kernel.LoadAsync(PluginAssemblyPath()).AsTask().WaitAsync(Timeout));
+
+            Assert.Contains(ContractAssemblyName, error.Message);
+            Assert.Contains(nameof(DougongKernel.RegisterSharedContract), error.Message);
+            Assert.Empty(await kernel.GetPluginsAsync());
+        }
+        finally
+        {
+            context.Unload();
+        }
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static System.Reflection.Assembly LoadContractAssembly() =>
-        System.Reflection.Assembly.LoadFrom(Path.Combine(
-            Path.GetFullPath(Path.Combine(
-                AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-                "samples", "Dougong.Sample.Isolated", "bin", Configuration, "net10.0")),
-            $"{ContractAssemblyName}.dll"));
+        System.Reflection.Assembly.LoadFrom(ContractAssemblyPath());
+
+    private static string ContractAssemblyPath() => Path.Combine(
+        Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "..",
+            "samples", "Dougong.Sample.Isolated", "bin", Configuration, "net10.0")),
+        $"{ContractAssemblyName}.dll");
 }

@@ -27,6 +27,13 @@ public sealed partial class DougongKernel
             var pluginType = FindPluginType(assembly, typeName);
             var manifest = ReadManifest(pluginType);
             EnsureContractsCompatible(manifest);
+
+            // 装配时曾回落到宿主进程里的同名程序集，而它既不在插件目录、
+            // 也没登记为共享契约。此时插件"看起来加载成功"，实际绑定的是
+            // 宿主里恰好存在的那个程序集——换到干净进程就会失败。
+            if (context.UnregisteredHostFallbacks is { Count: > 0 } fallbacks)
+                throw new InvalidOperationException(DescribeUnregisteredFallback(fallbacks));
+
             var loaded = new LoadedPlugin(context, pluginType, manifest.Id);
             var handle = await RegisterCoreAsync(
                 () => CreatePlugin(loaded), manifest, loaded, cancellationToken).ConfigureAwait(false);
@@ -63,6 +70,19 @@ public sealed partial class DougongKernel
         $"无法加载程序集 '{missing}'。若它是宿主与插件共享的契约，"
         + $"请在加载前调用 {nameof(DougongKernel)}.{nameof(RegisterSharedContract)} 登记；"
         + "否则请确认该依赖随插件一同部署。";
+
+    /// <summary>
+    /// 插件装配回落到宿主进程中未登记同名程序集时的诊断。
+    /// </summary>
+    /// <remarks>
+    /// 这种失败最隐蔽：在"跑过相关代码"的进程里能加载，在干净进程里失败。
+    /// 诊断必须同时说明发生了什么与怎么改，否则使用者只会看到"有时能跑"。
+    /// </remarks>
+    private static string DescribeUnregisteredFallback(IReadOnlyList<string> names) =>
+        $"程序集 {string.Join("、", names.Select(n => $"'{n}'"))} 不在插件目录中，"
+        + "也未登记为共享契约，但宿主进程中已存在同名程序集，装配被静默回落到宿主。"
+        + $"请显式登记：{nameof(DougongKernel)}.{nameof(RegisterSharedContract)}，"
+        + "或把这些程序集随插件一同部署。";
 
     /// <summary>
     /// 停止并卸载动态插件：先停用排空，再释放工厂、实例与服务引用，最后调用 ALC.Unload()。
