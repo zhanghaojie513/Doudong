@@ -153,6 +153,7 @@ dotnet pack Dougong.slnx -c Release --output ./artifacts/packages
 | [最终目的](docs/goal.md) | 四条不可让渡的性质、反目标与可执行的达成判定 |
 | [完成定义](docs/quality-gates.md) | 六道质量门、红线、按规模裁剪 |
 | [开发计划](docs/plan.md) | 里程碑顺序、缺口台账；防跑偏用 |
+| [ACP 参照调查](docs/acp-reference-survey.md) | TKCode 与 pi.net 的实际做法，M2.4 可借鉴/不可借鉴项 |
 | [M1 开发历程](docs/journey/m1-dev-journey.md) | M1 期间的实现缺陷、测试缺陷与判断错误；含真实 provider 才暴露的协议问题 |
 | [设计理念](docs/vision/philosophy.md) | 斗拱隐喻、设计原则和明确不做的事情 |
 | [前沿调查](docs/vision/frontier-roadmap.md) | Agent Harness、协议、隔离和记忆评测的公开进展 |

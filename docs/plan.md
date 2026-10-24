@@ -124,7 +124,7 @@ status.md 的记录不够准确（写了"未实现真实模型摘要"，但没�
 | 2.1 | **MCP 工具桥接**（P4，兼 P1）— **已完成** | 见 `status.md` M2 段；`-- mcp` 8 项 |
 | 2.2 | MCP 变化检测（P3）— **已完成** | `-- mcp-reload` 4 项；含反证 4/4 |
 | 2.3 | 指标导出（P1/P4）— **已完成** | `-- telemetry` 5 项；BCL Meter，不直接依赖 OTel 包 |
-| 2.4 | ACP stdio（P1/P4） | 工作量最大；协议面需手写 + 版本锁定 + 独立兼容测试 |
+| 2.4 | ACP Agent 端 stdio（P1/P4） | 工作量最大；协议面需手写 + 版本锁定 + 独立兼容测试。前置调查见 [acp-reference-survey.md](acp-reference-survey.md) |
 
 **MCP 优先于 ACP 的理由**：MCP 扩展"能做什么"，ACP 扩展"怎么接入"。后者依赖前者有内容可暴露。
 
@@ -191,7 +191,17 @@ M2.2 的热更新让"批准了 A、执行了 B"成为现实风险（G6），
 
 ## 六、下一个具体动作
 
-**M2 的 2.1/2.2/2.3 均已完成。下一步执行 2.4 项：ACP stdio。**
+**M2 的 2.1/2.2/2.3 均已完成。下一步执行 2.4 项：ACP Agent 端 stdio。**
+
+**前置调查已完成**：[acp-reference-survey.md](acp-reference-survey.md)。三个关键结论：
+
+1. **方向相反**：TKCode 做 ACP **Client**（驱动子进程），我们要做 ACP **Agent**（被驱动）。
+   可借鉴协议形状与真实怪癖，不可借鉴进程管理与审批 UI。
+2. **pi.net 没有 ACP**：它的 `Pi.Protocol` 是自研 CBOR 协议，`Pi.Mcp` 是 MCP。
+   M2.4 无法从它借鉴，这一点必须如实记录以免误传。
+3. **首版范围**：只做能跑通一轮对话的最小闭环（initialize / session/new /
+   session/prompt / session/cancel / 5 种 session/update / request_permission），
+   其余声明不支持而不是"实现了但走不通"。
 
 这一项的必答：
 
