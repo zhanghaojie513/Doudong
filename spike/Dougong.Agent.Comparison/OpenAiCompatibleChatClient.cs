@@ -111,8 +111,13 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
                     var index = toolDelta!["index"]?.GetValue<int>() ?? 0;
                     if (!pendingCalls.TryGetValue(index, out var pending))
                         pending = (string.Empty, string.Empty, new StringBuilder());
-                    pending.Id = toolDelta["id"]?.GetValue<string>() ?? pending.Id;
-                    pending.Name = toolDelta["function"]?["name"]?.GetValue<string>() ?? pending.Name;
+
+                    // 只在"有非空值"时覆盖：多数端点首帧给 id/name，后续帧只给 arguments，
+                    // 且可能给空字符串而不是 null，不能直接赋值。
+                    if (toolDelta["id"]?.GetValue<string>() is { Length: > 0 } id)
+                        pending.Id = id;
+                    if (toolDelta["function"]?["name"]?.GetValue<string>() is { Length: > 0 } name)
+                        pending.Name = name;
                     if (toolDelta["function"]?["arguments"]?.GetValue<string>() is { } fragment)
                         pending.Args.Append(fragment);
                     pendingCalls[index] = pending;
@@ -120,7 +125,15 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             }
 
             // finish_reason 到达后该轮的调用才算完整，可以解析并下发。
-            if (choice["finish_reason"]?.GetValue<string>() is { } finish && finish != "null")
+            // 注意：不同端点的"未完成"表示法不同——null、空字符串、缺失都出现过。
+            // 只认非空字符串为终结，否则 Waygate 这类端点会在每个 delta 上误触发下发。
+            var finishValue = choice["finish_reason"];
+            var finished = finishValue is not null
+                && finishValue.GetValueKind() == JsonValueKind.String
+                && finishValue.GetValue<string>() is { Length: > 0 } reason
+                && reason != "null";
+
+            if (finished)
             {
                 foreach (var pending in pendingCalls.Values)
                 {

@@ -136,6 +136,18 @@ design.md §2.1 要求的"再用一家真实 provider 完成相同编码任务"�
 |---|---|---|
 | `mimo-v2.6-flash`（Xiaomi MiMo） | `https://token-plan-cn.xiaomimimo.com/v1` | **5/5 PASS** |
 | `MiniMax-M3.1-Flash`（MiniMax） | `https://api.minimax.chat/v1` | **5/5 PASS** |
+| `deepseek-v4.1-flash`（途关 Waygate） | `https://www.haihao.xyz:8443/v1` | **5/5 PASS** |
+| `GLM-5.3`（智谱 BigModel） | `https://open.bigmodel.cn/api/paas/v4` | **5/5 PASS** |
+| `GLM-5.3-Flash`（智谱 BigModel） | `https://open.bigmodel.cn/api/paas/v4` | **5/5 PASS** |
+
+未通过（账户状态问题，非代码缺陷）：
+
+| 模型 | 端点 | 状态 |
+|---|---|---|
+| `gpt-6.1-sol` 等（Routin Plan） | `https://api.routin.ai/plan/v1` | 403 `plan_required`（"No active plan subscription"） |
+| `GLM-5.3`（BigModel Coding Plan / Start Plan） | 同 bigmodel / `zcode.z.ai/.../zcode-plan` | 429 余额不足 / 401 未授权 |
+
+五个模型全部走的同一个 `OpenAiCompatibleChatClient`，没有为某家写特例分支。
 
 验证项（每项都是可观察行为，不是"跑通不报错"）：
 
@@ -148,6 +160,9 @@ design.md §2.1 要求的"再用一家真实 provider 完成相同编码任务"�
 5. `coding-task` —— 真实编码任务：模型写下 `answer.txt`，宿主校验文件内容含 "42"，越界路径被拒
 
 稳定性：两家模型各连续运行 3 轮，均 `ALL PASS`。
+
+> **协议变体的价值**：五个端点里，Waygate 是唯一暴露"空字符串当缺失"这一族的。
+> 如果只测一两家，这类兼容问题会一直潜伏到用户现场。
 
 > **一条测试设计教训**：`unknown-tool-real` 最初写成"要求模型去调用不存在的工具名"，
 > 结果间歇性失败——模型有时不听话，直接改调了已注册的 `read_file`。
@@ -182,7 +197,19 @@ MiMo 会发送 `choices: []` 的 usage-only 帧，`chunk["choices"]?[0]` 直接�
 
 假模型永远返回恰好一个 choice，所以这条路径从未被覆盖。修法：先判 `choices.Count`。
 
-**（3）参数分片的真实语义与假模型假设不同**
+**（3）Waygate 暴露的两种"空值覆盖"**
+
+`deepseek-v4.1-flash` 的流式帧有两种形态：首帧给 `id`/`name`，后续帧**只给 `arguments` 片段**，
+且 `id`/`name` 以**空字符串**而非 `null` 出现。原实现用 `?? pending.Id` 只挡住 null，
+结果被空字符串覆盖，最终产生大量空 ID、空名称的伪调用（一次响应里出现 17 条）。
+
+同一个端点还把未完成的 `finish_reason` 表示为**空字符串**而不是 `null` 或缺失。
+原判断 `finish != "null"` 把 `""` 当成有效终结，导致**每个 delta 都触发一次下发**。
+
+两处修法：只接受非空字符串；`id`/`name` 也只在非空时覆盖。
+这两个缺陷在 MiMo 与 MiniMax 上都不出现——**它们是协议变体，不是协议错误**。
+
+**（4）参数分片的真实语义与假模型假设不同**
 
 GLM 与 MiniMax 的流式协议证实：工具参数是**原始 JSON 字符串片段**，需要按 index 拼接到结束才可解析：
 

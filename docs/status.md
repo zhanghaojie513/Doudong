@@ -78,10 +78,14 @@
     均 10/10；最终选**候选 B（自研循环）**，依据是候选 A 存在可复现的事件顺序错误、
     终止原因错误、每场景多一轮模型调用，且关闭旁路依赖带 `ExperimentalAttribute` 的
     `EnableInvocableFunctionBypassing`。
-  - **真实 provider 已验证**：`mimo-v2.6-flash` 与 `MiniMax-M3.1-Flash` 各 5/5 通过
-    （工具派发、真实流式分片参数、未注册工具拒绝、纯文本、真实编码任务）。
+  - **真实 provider 已验证**：五个模型各 5/5 通过——`mimo-v2.6-flash`、`MiniMax-M3.1-Flash`、
+    `deepseek-v4.1-flash`（Waygate）、`GLM-5.3`、`GLM-5.3-Flash`（BigModel），
+    全部走同一个连接器，无按厂商特例分支。Routin Plan 因订阅未激活 403，非代码问题。
   - 真实调用暴露三个假模型测不出的缺陷：循环未把工具声明传给模型（模型输出 XML 伪调用）、
-    空 `choices` 帧越界、参数分片语义（应按 index 拼接原文而非按键合并字典）。均已修复。
+    空 `choices` 帧越界、参数分片语义（应按 index 拼接原文而非按键合并字典）。
+  - Waygate 另外暴露两种"空字符串当缺失"的协议变体：后续帧用空字符串覆盖 `id`/`name`
+    （原 `??` 只挡 null），以及用空字符串表示未完成的 `finish_reason`（导致每个 delta 误下发）。
+    已修复为"只接受非空值"。
 - [ ] 唯一 dispatcher：schema/参数规范化、审批身份绑定、执行前校验、调用去重、资源冲突和取消终态。
   - 已实现（`src/Dougong.Agent/ToolDispatcher.cs`）：最小 JSON schema 校验（顶层 type 与 required）、
     调用 ID 去重、权限描述采集、七种明确终态、旁路检测用的调用记录、冻结工具声明的对外投影。
