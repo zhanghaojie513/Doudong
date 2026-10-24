@@ -139,15 +139,30 @@ design.md §2.1 要求的"再用一家真实 provider 完成相同编码任务"�
 | `deepseek-v4.1-flash`（途关 Waygate） | `https://www.haihao.xyz:8443/v1` | **5/5 PASS** |
 | `GLM-5.3`（智谱 BigModel） | `https://open.bigmodel.cn/api/paas/v4` | **5/5 PASS** |
 | `GLM-5.3-Flash`（智谱 BigModel） | `https://open.bigmodel.cn/api/paas/v4` | **5/5 PASS** |
+| `gpt-6.1-sol`（Routin） | `https://api.routin.ai`（Anthropic 协议） | **5/5 PASS** |
 
 未通过（账户状态问题，非代码缺陷）：
 
 | 模型 | 端点 | 状态 |
 |---|---|---|
-| `gpt-6.1-sol` 等（Routin Plan） | `https://api.routin.ai/plan/v1` | 403 `plan_required`（"No active plan subscription"） |
+| `gpt-6.1-sol` 等（Routin **Plan**） | `https://api.routin.ai/plan/v1` | 403 `plan_required`（"No active plan subscription"；该订阅未激活，改用非 Plan 端点后通过） |
 | `GLM-5.3`（BigModel Coding Plan / Start Plan） | 同 bigmodel / `zcode.z.ai/.../zcode-plan` | 429 余额不足 / 401 未授权 |
 
-五个模型全部走的同一个 `OpenAiCompatibleChatClient`，没有为某家写特例分支。
+两种协议、两个适配器，按端点协议选用：
+
+- **OpenAI chat-completions**（`OpenAiCompatibleChatClient`）：MiMo、MiniMax、Waygate、BigModel
+- **Anthropic messages**（`AnthropicMessagesChatClient`）：Routin 的 gpt-6.1-sol
+
+两个适配器都实现同一个 `IChatClient`，因此被比较的始终是 Dougong 的循环，不是连接器差异。
+协议差异是结构性的，不是风格差异：
+
+| | OpenAI | Anthropic |
+|---|---|---|
+| 工具声明 | `tools[].function.parameters` | `tools[].input_schema` |
+| 工具调用 | `message.tool_calls[]` | content block `type: tool_use` |
+| 流式参数 | `tool_calls[].function.arguments` 片段 | `input_json_delta.partial_json` |
+| 终结信号 | 每个 chunk 的 `finish_reason` | `message_delta.stop_reason` |
+| system 提示 | messages 内的一条 | 独立 `system` 字段 |
 
 验证项（每项都是可观察行为，不是"跑通不报错"）：
 

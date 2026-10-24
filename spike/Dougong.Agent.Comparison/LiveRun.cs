@@ -29,17 +29,18 @@ public static class LiveRun
             return 2;
         }
 
-        Console.WriteLine($"LIVE: model={model}, base={baseUrl}");
+        var protocol = Environment.GetEnvironmentVariable("DOUGONG_PROVIDER_PROTOCOL") ?? "openai";
+        Console.WriteLine($"LIVE: model={model}, base={baseUrl}, protocol={protocol}");
         var failures = 0;
 
-        failures += await RunScenariosAsync(baseUrl, apiKey, model);
-        failures += await RunCodingTaskAsync(baseUrl, apiKey, model);
+        failures += await RunScenariosAsync(baseUrl, apiKey, model, protocol);
+        failures += await RunCodingTaskAsync(baseUrl, apiKey, model, protocol);
 
         Console.WriteLine(failures == 0 ? "LIVE: ALL PASS" : $"LIVE: {failures} FAILURE(S)");
         return failures == 0 ? 0 : 1;
     }
 
-    private static async Task<int> RunScenariosAsync(string baseUrl, string apiKey, string model)
+    private static async Task<int> RunScenariosAsync(string baseUrl, string apiKey, string model, string protocol)
     {
         Console.WriteLine();
         Console.WriteLine("== 真实模型反例 ==");
@@ -51,7 +52,7 @@ public static class LiveRun
             var dispatcher = new ToolDispatcher();
             var tool = new FakeTool("read_file", ["path"]);
             dispatcher.Register(tool);
-            var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model);
+            var client = CreateClient(baseUrl, apiKey, model, protocol);
             var runtime = new LoopAgentRuntime(client, dispatcher);
 
             var events = await CollectAsync(runtime,
@@ -75,7 +76,7 @@ public static class LiveRun
             var dispatcher = new ToolDispatcher();
             var tool = new FakeTool("write_file", ["path", "content"]);
             dispatcher.Register(tool);
-            var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model);
+            var client = CreateClient(baseUrl, apiKey, model, protocol);
             var runtime = new LoopAgentRuntime(client, dispatcher);
 
             var events = await CollectAsync(runtime,
@@ -97,7 +98,7 @@ public static class LiveRun
             var dispatcher = new ToolDispatcher();
             var registered = new FakeTool("read_file", ["path"]);
             dispatcher.Register(registered);
-            var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model);
+            var client = CreateClient(baseUrl, apiKey, model, protocol);
             var runtime = new LoopAgentRuntime(client, dispatcher);
 
             var events = await CollectAsync(runtime,
@@ -122,7 +123,7 @@ public static class LiveRun
         {
             var dispatcher = new ToolDispatcher();
             dispatcher.Register(new FakeTool("read_file", ["path"]));
-            var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model);
+            var client = CreateClient(baseUrl, apiKey, model, protocol);
             var runtime = new LoopAgentRuntime(client, dispatcher);
 
             var events = await CollectAsync(runtime, "Say exactly: hello");
@@ -135,7 +136,7 @@ public static class LiveRun
         return failures;
     }
 
-    private static async Task<int> RunCodingTaskAsync(string baseUrl, string apiKey, string model)
+    private static async Task<int> RunCodingTaskAsync(string baseUrl, string apiKey, string model, string protocol)
     {
         Console.WriteLine();
         Console.WriteLine("== 真实编码任务 ==");
@@ -177,7 +178,7 @@ public static class LiveRun
                 dispatcher.Register(write);
                 dispatcher.Register(list);
 
-                var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model);
+                var client = CreateClient(baseUrl, apiKey, model, protocol);
                 var runtime = new LoopAgentRuntime(client, dispatcher);
 
                 var events = await CollectAsync(runtime,
@@ -201,6 +202,16 @@ public static class LiveRun
             try { Directory.Delete(workspace, recursive: true); } catch { }
         }
     }
+
+    /// <summary>
+    /// 按协议选择连接器。两者实现同一 <see cref="IChatClient"/>，
+    /// 因此被比较的始终是 Dougong 的循环，而不是连接器差异。
+    /// </summary>
+    private static IChatClient CreateClient(
+        string baseUrl, string apiKey, string model, string protocol) =>
+        protocol.Equals("anthropic", StringComparison.OrdinalIgnoreCase)
+            ? new AnthropicMessagesChatClient(baseUrl, apiKey, model)
+            : new OpenAiCompatibleChatClient(baseUrl, apiKey, model);
 
     private static async Task<IReadOnlyList<AgentEvent>> CollectAsync(
         IAgentRuntime runtime, string input)

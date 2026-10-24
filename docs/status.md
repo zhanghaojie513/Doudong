@@ -78,9 +78,10 @@
     均 10/10；最终选**候选 B（自研循环）**，依据是候选 A 存在可复现的事件顺序错误、
     终止原因错误、每场景多一轮模型调用，且关闭旁路依赖带 `ExperimentalAttribute` 的
     `EnableInvocableFunctionBypassing`。
-  - **真实 provider 已验证**：五个模型各 5/5 通过——`mimo-v2.6-flash`、`MiniMax-M3.1-Flash`、
-    `deepseek-v4.1-flash`（Waygate）、`GLM-5.3`、`GLM-5.3-Flash`（BigModel），
-    全部走同一个连接器，无按厂商特例分支。Routin Plan 因订阅未激活 403，非代码问题。
+  - **真实 provider 已验证**：六个模型各 5/5 通过——`mimo-v2.6-flash`、`MiniMax-M3.1-Flash`、
+    `deepseek-v4.1-flash`（Waygate）、`GLM-5.3`、`GLM-5.3-Flash`（BigModel）走 OpenAI 协议，
+    `gpt-6.1-sol`（Routin）走 Anthropic 协议。两个适配器实现同一 `IChatClient`，
+    被比较的始终是循环。Routin **Plan** 端点因订阅未激活 403，非代码问题。
   - 真实调用暴露三个假模型测不出的缺陷：循环未把工具声明传给模型（模型输出 XML 伪调用）、
     空 `choices` 帧越界、参数分片语义（应按 index 拼接原文而非按键合并字典）。
   - Waygate 另外暴露两种"空字符串当缺失"的协议变体：后续帧用空字符串覆盖 `id`/`name`
