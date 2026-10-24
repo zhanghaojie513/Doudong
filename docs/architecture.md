@@ -306,6 +306,8 @@ public sealed record AgentToolResult(JsonElement Content, JsonElement? Details =
 
 每个 MCP server 连接由插件管理，工具桥接为 Agent 契约并通过同一 dispatcher。逐工具配置权限及资源计划；server 提供的 annotations 仅作提示，不是可信授权依据。未知工具默认不能自动批准，不以整个 server 的低风险默认值覆盖破坏性工具。工具列表/参数 schema/来源身份变化时更新注册版本，使旧审批失效；连接断开或取消后不假定远端操作已撤销，缺结果调用按未知状态处理。
 
+**M2.1 实现要点**：`McpAgentTool` 做**适配**而非继承（`McpClientTool` 是 `AIFunction` 子类，而 `AIFunction` 不可子类化）。三条硬约束落到代码上：权限一律报 `IsKnown=false`，不把远端的 `readOnlyHint` 翻译成 `Read`（恶意或有 bug 的 server 可以声称只读却写文件）；工具版本用 schema 的 SHA-256 摘要，使 schema 变化必然改变版本；远端 `IsError` 抛专门异常，与传输失败区分开。远端工具一律取工作区独占——无法知道它是否改动了本工作区。
+
 ### 5.3 Acp 层（Dougong.Acp）
 
 协议面（C# 无官方 SDK，手写实现，协议版本锁定 + 兼容测试）：

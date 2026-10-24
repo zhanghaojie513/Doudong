@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Dougong.Agent;
 using Dougong.Ai;
+using Dougong.Mcp;
 using Microsoft.Extensions.AI;
 
 namespace Dougong.Cli;
@@ -19,6 +20,7 @@ namespace Dougong.Cli;
 /// <item><c>DOUGONG_SESSION_DIR</c> 可选，默认 ~/.dougong/sessions</item>
 /// <item><c>DOUGONG_SHELL</c> 可选：设为 <c>1</c> 时启用 <c>shell</c> 工具（默认关闭）</item>
 /// <item><c>DOUGONG_CONTEXT_WINDOW</c> 可选：模型上下文窗口大小；设置后启用历史压缩（默认关闭）</item>
+/// <item><c>DOUGONG_MCP_SERVERS</c> 可选：MCP server 列表，形如 <c>name=command args;name2=...</c>（默认不连）</item>
 /// </list>
 /// 会话参数：
 /// <list type="bullet">
@@ -176,6 +178,40 @@ public static class Program
         dispatcher.Register(new WriteFileTool(workspace));
 
         if (shellEnabled) dispatcher.Register(new ShellTool(workspace));
+
+        // MCP server 默认不连：远端工具权限未知，必须显式开启。
+        // 格式：DOUGONG_MCP_SERVERS="name=command args;name2=command args"
+        var mcpClients = new List<ModelContextProtocol.Client.McpClient>();
+        foreach (var (name, command, arguments) in ParseMcpServers())
+        {
+            try
+            {
+                var options = new ModelContextProtocol.Client.StdioClientTransportOptions
+                {
+                    Name = name,
+                    Command = command,
+                    Arguments = [.. arguments],
+                    // 不继承宿主环境：与 shell 工具同理，密钥不能交给远端进程。
+                    InheritEnvironmentVariables = false,
+                };
+
+                var transport = new ModelContextProtocol.Client.StdioClientTransport(options, null);
+                var mcpClient = await ModelContextProtocol.Client.McpClient.CreateAsync(
+                    transport, null, null, CancellationToken.None);
+                mcpClients.Add(mcpClient);
+
+                var tools = await mcpClient.ListToolsAsync(cancellationToken: CancellationToken.None);
+                foreach (var tool in tools)
+                    dispatcher.Register(new McpAgentTool(tool, name));
+
+                Console.WriteLine($"MCP '{name}'：已桥接 {tools.Count} 个工具");
+            }
+            catch (Exception ex)
+            {
+                // 连不上不阻止启动，但必须说清楚——静默跳过会让用户以为工具已就绪。
+                Console.Error.WriteLine($"MCP '{name}' 连接失败：{ex.GetType().Name}: {ex.Message}");
+            }
+        }
 
         var runtime = contextWindow > 0
             ? new LoopAgentRuntime(
@@ -393,6 +429,31 @@ public static class Program
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// 解析 <c>DOUGONG_MCP_SERVERS</c>：分号分隔多个 server，每个形如 <c>name=command 参数1 参数2</c>。
+    /// </summary>
+    private static IEnumerable<(string Name, string Command, IReadOnlyList<string> Arguments)>
+        ParseMcpServers()
+    {
+        var raw = Environment.GetEnvironmentVariable("DOUGONG_MCP_SERVERS");
+        if (string.IsNullOrWhiteSpace(raw)) yield break;
+
+        foreach (var entry in raw.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var separator = entry.IndexOf('=');
+            if (separator <= 0) continue;
+
+            var name = entry[..separator].Trim();
+            var commandLine = entry[(separator + 1)..].Trim();
+            if (name.Length == 0 || commandLine.Length == 0) continue;
+
+            var parts = commandLine.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length == 0) continue;
+
+            yield return (name, parts[0], parts[1..]);
+        }
     }
 
     /// <summary>

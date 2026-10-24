@@ -5,7 +5,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Dougong.Kernel\Dougong.Kernel.csproj" />
+    <PackageReference Include="ModelContextProtocol" />
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 工具桥接要把远端工具表达成 Dougong 的 IAgentTool，因此需要 Agent 契约。 -->
+    <ProjectReference Include="..\Dougong.Agent\Dougong.Agent.csproj" />
   </ItemGroup>
 
 </Project>

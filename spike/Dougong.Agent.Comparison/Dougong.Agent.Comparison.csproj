@@ -9,11 +9,13 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Agents.AI" />
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+    <PackageReference Include="ModelContextProtocol" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Dougong.Agent\Dougong.Agent.csproj" />
     <ProjectReference Include="..\..\src\Dougong.Ai\Dougong.Ai.csproj" />
+    <ProjectReference Include="..\..\src\Dougong.Mcp\Dougong.Mcp.csproj" />
   </ItemGroup>
 
 </Project>

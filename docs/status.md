@@ -237,6 +237,20 @@
 ## M2/M3 后续验收入口
 
 - [ ] M2 ACP/MCP 按版本/能力联调，未知权限、schema 变化、审批取消和日志出口均覆盖。
+  - **MCP 工具桥接已实现**（`src/Dougong.Mcp/McpAgentTool.cs`，ModelContextProtocol 2.3.0）：
+    远端工具包装为 `IAgentTool`，经过同一个 dispatcher。8 项验收（`-- mcp`）用**真实的
+    MCP client + server 内存配对**，不是 mock。
+  - 三条硬约束各有验收项：远端 annotations 仅作提示、**不得**翻译成已知权限；
+    schema 变化必须改变工具版本（否则旧审批继续有效）；远端 `IsError` 必须是失败终态。
+  - 连不上 server 不阻止启动，但必须报错——静默跳过会让用户以为工具已就绪。
+  - **修掉一个契约不一致的真实缺陷**：`ToolDeclarations` 把 `Name` 发给模型，
+    而 dispatcher 只按 `Id` 查找。M1 里所有工具 `Id == Name` 所以从未暴露；
+    MCP 工具 ID 带 server 前缀（`demo/echo`）立刻暴露为"工具已注册却被判未注册"。
+    已让 dispatcher 同时按 Id 与 Name 路由，并有反证。
+  - CLI 接入：`DOUGONG_MCP_SERVERS="name=command args;..."`，默认不连。
+    子进程不继承宿主环境（与 shell 工具同理）。真实 stdio server 端到端验证通过。
+  - **未实现**：MCP 工具列表热更新（变化检测）、resources/prompts、HTTP transport、
+    ACP 全部。
 - [ ] M2 L1 默认候选待审；受限自动启用需用户选择，来源/作用域/撤销/隐私双数据流和最小留出评测齐备。
 - [ ] M3 API/行为兼容、作者模板和卸载测试稳定化；完整 Skill 进化和评测优化按验证结果后续建设。
 
@@ -314,6 +328,12 @@
   9 项自检通过（含反证）；等待审批期间不持锁，避免慢审批阻塞工作区。
 - 2026-10-24：M1 提交屏障：`IAgentStore` 契约与 JSONL 实现，四个提交落点串起
   "先提交意图、再产生副作用"；6 项自检通过，并用移除屏障的反证确认测试有效。
+- 2026-10-24：M2 起步：MCP 工具桥接（ModelContextProtocol 2.3.0）。
+  远端工具包装为 IAgentTool 走同一 dispatcher；annotations 不作授权、schema 变化改版本、
+  IsError 记失败。8 项验收用真实 client/server 内存配对（含三个反证）。
+  修掉一个契约不一致缺陷：模型只看得见工具 Name，而 dispatcher 只按 Id 查找
+  ——M1 里 Id==Name 从未暴露，MCP 的 server 前缀立刻触发了它。
+
 - 2026-10-24：M1 G2/G3 修复：审批决定与运行终态从未落盘（两处枚举值使用点均为 0）。
   dispatcher 新增可选 store，审批后提交绑定参数摘要的记录，提交失败阻止执行；
   新增 ApprovalLog/ApprovalSnapshot 让「有调用但无审批记录」可表达；

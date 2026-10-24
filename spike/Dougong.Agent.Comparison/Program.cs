@@ -54,6 +54,13 @@ public static class Program
         if (args.FirstOrDefault() == "reachability")
             return ReachabilityChecks.Run();
 
+        if (args.FirstOrDefault() == "mcp")
+            return await McpBridgeChecks.RunAsync();
+
+        // 供端到端测试使用的最小 stdio MCP server。
+        if (args.FirstOrDefault() == "mcp-server")
+            return await McpTestServer.RunAsync();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 

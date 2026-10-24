@@ -49,6 +49,7 @@ public sealed class ToolDispatcher : IToolDispatcher
     private readonly IAgentStore? _store;
 
     private readonly Dictionary<string, Registration> _tools = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Registration> _aliases = new(StringComparer.Ordinal);
     private readonly HashSet<string> _seenInvocations = new(StringComparer.Ordinal);
 
     /// <summary>
@@ -85,13 +86,25 @@ public sealed class ToolDispatcher : IToolDispatcher
 
         // 冻结：复制 schema，避免注册后外部改动影响已发布给模型的描述。
         var frozen = descriptor with { InputSchema = descriptor.InputSchema.Clone() };
+        var registration = new Registration(tool, frozen);
         lock (_sync)
         {
-            if (!_tools.TryAdd(descriptor.Id, new Registration(tool, frozen)))
+            if (!_tools.TryAdd(descriptor.Id, registration))
                 throw new InvalidOperationException($"工具 '{descriptor.Id}' 已注册。");
+
+            // 模型只看得见 Name（见 ToolDeclarations），回传的调用里自然也是 Name。
+            // 因此 Name 必须也能路由到同一个注册项，否则"工具已注册却被判未注册"。
+            // Id 与 Name 相同时不额外占用键；不同名时保留 Id 优先。
+            if (!string.Equals(descriptor.Name, descriptor.Id, StringComparison.Ordinal)
+                && !_aliases.TryAdd(descriptor.Name, registration))
+            {
+                _tools.Remove(descriptor.Id);
+                throw new InvalidOperationException(
+                    $"工具名 '{descriptor.Name}' 与其他工具冲突（Id 为 '{descriptor.Id}'）。");
+            }
         }
 
-        return new RegistrationHandle(this, descriptor.Id);
+        return new RegistrationHandle(this, descriptor.Id, descriptor.Name);
     }
 
     public async ValueTask<ToolDispatchResult> DispatchAsync(
@@ -109,7 +122,9 @@ public sealed class ToolDispatcher : IToolDispatcher
             if (!_seenInvocations.Add(invocation.InvocationId))
                 return Reject(invocation, ToolCallOutcome.RejectedDuplicateInvocation,
                     $"调用 ID '{invocation.InvocationId}' 重复。");
-            _tools.TryGetValue(invocation.ToolId, out registration);
+            // 先按 Id 找（宿主内部派发），再按 Name 找（模型回传只看得到 Name）。
+            if (!_tools.TryGetValue(invocation.ToolId, out registration))
+                _aliases.TryGetValue(invocation.ToolId, out registration);
         }
 
         if (registration is null)
@@ -406,14 +421,19 @@ public sealed class ToolDispatcher : IToolDispatcher
 
     private sealed record Registration(IAgentTool Tool, ToolDescriptor Descriptor);
 
-    private sealed class RegistrationHandle(ToolDispatcher owner, string toolId) : IDisposable
+    private sealed class RegistrationHandle(ToolDispatcher owner, string toolId, string toolName) : IDisposable
     {
         private int _disposed;
 
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            lock (owner._sync) { owner._tools.Remove(toolId); }
+            lock (owner._sync)
+            {
+                owner._tools.Remove(toolId);
+                if (!string.Equals(toolName, toolId, StringComparison.Ordinal))
+                    owner._aliases.Remove(toolName);
+            }
         }
     }
 }
