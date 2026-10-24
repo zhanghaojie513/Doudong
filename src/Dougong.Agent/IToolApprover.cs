@@ -57,12 +57,13 @@ public sealed record ApprovalBinding(
     string ArgumentsDigest,
     string Workspace,
     string PermissionScope,
-    DateTimeOffset ExpiresAt)
+    DateTimeOffset ExpiresAt,
+    string FileVersions = "")
 {
     /// <summary>把绑定折叠成一个稳定字符串（不含时刻），用于比较与审计。</summary>
     public string ToKey() => string.Join('|',
         SessionId, TurnId, InvocationId, ToolId, ToolVersion,
-        ArgumentsDigest, Workspace, PermissionScope);
+        ArgumentsDigest, Workspace, PermissionScope, FileVersions);
 
     /// <summary>
     /// 凭据是否仍适用于当前这次调用。比较的是"批准了什么"，

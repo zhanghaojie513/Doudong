@@ -20,6 +20,7 @@ public sealed class ToolDispatcher : IToolDispatcher
     private readonly string _turnId;
     private readonly string _workspace;
     private readonly TimeSpan _approvalValidity;
+    private readonly WorkspacePathGuard? _pathGuard;
 
     /// <summary>
     /// 建立 dispatcher。审批器、资源闸门与工作区都可省略：
@@ -31,7 +32,8 @@ public sealed class ToolDispatcher : IToolDispatcher
         string sessionId = "session",
         string turnId = "turn",
         string workspace = ".",
-        TimeSpan? approvalValidity = null)
+        TimeSpan? approvalValidity = null,
+        WorkspacePathGuard? pathGuard = null)
     {
         _approver = approver;
         _gate = gate;
@@ -39,6 +41,7 @@ public sealed class ToolDispatcher : IToolDispatcher
         _turnId = turnId;
         _workspace = workspace;
         _approvalValidity = approvalValidity ?? TimeSpan.FromMinutes(5);
+        _pathGuard = pathGuard;
     }
 
     private readonly Dictionary<string, Registration> _tools = new(StringComparer.Ordinal);
@@ -121,22 +124,27 @@ public sealed class ToolDispatcher : IToolDispatcher
 
         ToolPermission permission;
         ToolExecutionPlan execution;
+        FileVersionSet files;
         try
         {
             permission = registration.Tool.DescribePermission(invocation.Arguments);
             execution = registration.Tool.DescribeExecution(invocation.Arguments);
+            files = CaptureFileVersions(registration, invocation);
         }
         catch (Exception ex)
         {
             return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
-                ToolCallOutcome.Failed, Diagnostic: $"权限/执行计划描述失败：{ex.Message}");
+                ToolCallOutcome.Failed, Diagnostic: $"权限/执行计划/文件依赖描述失败：{ex.Message}");
         }
 
         // 阶段一：预检（不持锁）。审批绑定必须基于规范化参数与本次权限描述。
         var binding = ArgumentCanonicalizer.Bind(
             _sessionId, _turnId, invocation.InvocationId,
             registration.Descriptor, invocation.Arguments, permission,
-            _workspace, _approvalValidity);
+            _workspace, _approvalValidity) with
+        {
+            FileVersions = files.ToBindingValue(),
+        };
 
         if (_approver is not null)
         {
@@ -190,7 +198,30 @@ public sealed class ToolDispatcher : IToolDispatcher
     /// 执行前复核：重新描述权限与执行计划，重算绑定，比对全部维度。
     /// 任一项变化即拒绝，要求重新审批。
     /// </summary>
-    private static bool approvalIsStillValid(
+    /// <summary>
+    /// 捕获工具声明的文件依赖版本。路径必须先经工作区守卫解析，
+    /// 越界直接抛错——宁可拒绝调用，也不对越界路径做指纹。
+    /// </summary>
+    private FileVersionSet CaptureFileVersions(Registration registration, ToolInvocation invocation)
+    {
+        var declared = registration.Tool.DescribeFileDependencies(invocation.Arguments);
+        if (declared.Count == 0) return FileVersionSet.Empty;
+        if (_pathGuard is null)
+            throw new InvalidOperationException(
+                "工具声明了文件依赖，但 dispatcher 未配置工作区路径守卫。");
+
+        var resolved = new List<string>(declared.Count);
+        foreach (var path in declared)
+        {
+            if (!_pathGuard.TryResolve(path, out var absolute, out var why))
+                throw new UnauthorizedAccessException($"文件依赖路径被拒绝：{path}（{why}）");
+            resolved.Add(absolute);
+        }
+
+        return FileVersionSet.Capture(resolved);
+    }
+
+    private bool approvalIsStillValid(
         Registration registration, ToolInvocation invocation, ToolPermission approvedPermission,
         ToolExecutionPlan approvedExecution, ApprovalBinding approvedBinding, out string reason)
     {
@@ -216,10 +247,22 @@ public sealed class ToolDispatcher : IToolDispatcher
         }
 
         // 只比较"批准了什么"，时刻由 IsUnexpired 单独判断。
+        FileVersionSet currentFiles;
+        try
+        {
+            currentFiles = CaptureFileVersions(registration, invocation);
+        }
+        catch (Exception ex)
+        {
+            reason = $"复核时无法重新捕获文件版本：{ex.Message}";
+            return false;
+        }
+
         var current = approvedBinding with
         {
             ArgumentsDigest = ArgumentCanonicalizer.Digest(invocation.Arguments),
             PermissionScope = ArgumentCanonicalizer.DescribeScope(currentPermission),
+            FileVersions = currentFiles.ToBindingValue(),
         };
 
         if (!approvedBinding.Matches(current))

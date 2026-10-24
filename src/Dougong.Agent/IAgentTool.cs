@@ -17,6 +17,12 @@ public interface IAgentTool
     /// <summary>描述本次调用的资源并发要求。</summary>
     ToolExecutionPlan DescribeExecution(JsonElement arguments);
 
+    /// <summary>
+    /// 声明本次调用依赖哪些文件的版本。审批时捕获、执行前比对；
+    /// 返回空表示不依赖文件内容（例如纯内存工具）。
+    /// </summary>
+    IReadOnlyList<string> DescribeFileDependencies(JsonElement arguments) => [];
+
     /// <summary>实际执行。只能由 dispatcher 调用。</summary>
     ValueTask<AgentToolResult> ExecuteAsync(ToolInvocation invocation, CancellationToken cancellationToken);
 }

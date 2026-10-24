@@ -24,6 +24,9 @@ public static class Program
         if (args.FirstOrDefault() == "approval")
             return await ApprovalChecks.RunAsync();
 
+        if (args.FirstOrDefault() == "fileversion")
+            return await FileVersionChecks.RunAsync();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 
