@@ -15,6 +15,9 @@ public static class Program
         if (args.FirstOrDefault() == "live")
             return await LiveRun.RunAsync();
 
+        if (args.FirstOrDefault() == "contract")
+            return ContractChecks.Run();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 

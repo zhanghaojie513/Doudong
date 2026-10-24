@@ -51,7 +51,7 @@ public static class LiveRun
             var dispatcher = new ToolDispatcher();
             var tool = new FakeTool("read_file", ["path"]);
             dispatcher.Register(tool);
-            var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model, new DispatcherToolSource(dispatcher));
+            var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model);
             var runtime = new LoopAgentRuntime(client, dispatcher);
 
             var events = await CollectAsync(runtime,
@@ -75,7 +75,7 @@ public static class LiveRun
             var dispatcher = new ToolDispatcher();
             var tool = new FakeTool("write_file", ["path", "content"]);
             dispatcher.Register(tool);
-            var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model, new DispatcherToolSource(dispatcher));
+            var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model);
             var runtime = new LoopAgentRuntime(client, dispatcher);
 
             var events = await CollectAsync(runtime,
@@ -97,7 +97,7 @@ public static class LiveRun
             var dispatcher = new ToolDispatcher();
             var registered = new FakeTool("read_file", ["path"]);
             dispatcher.Register(registered);
-            var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model, new DispatcherToolSource(dispatcher));
+            var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model);
             var runtime = new LoopAgentRuntime(client, dispatcher);
 
             var events = await CollectAsync(runtime,
@@ -122,7 +122,7 @@ public static class LiveRun
         {
             var dispatcher = new ToolDispatcher();
             dispatcher.Register(new FakeTool("read_file", ["path"]));
-            var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model, new DispatcherToolSource(dispatcher));
+            var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model);
             var runtime = new LoopAgentRuntime(client, dispatcher);
 
             var events = await CollectAsync(runtime, "Say exactly: hello");
@@ -177,7 +177,7 @@ public static class LiveRun
                 dispatcher.Register(write);
                 dispatcher.Register(list);
 
-                var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model, new DispatcherToolSource(dispatcher));
+                var client = new OpenAiCompatibleChatClient(baseUrl, apiKey, model);
                 var runtime = new LoopAgentRuntime(client, dispatcher);
 
                 var events = await CollectAsync(runtime,

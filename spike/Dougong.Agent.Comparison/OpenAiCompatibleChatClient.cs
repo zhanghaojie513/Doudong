@@ -23,16 +23,12 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
     private readonly string _baseUrl;
     private readonly string _apiKey;
     private readonly string _model;
-    private readonly IToolDeclarationSource? _tools;
-
     public OpenAiCompatibleChatClient(
-        string baseUrl, string apiKey, string model,
-        IToolDeclarationSource? tools = null, HttpClient? http = null)
+        string baseUrl, string apiKey, string model, HttpClient? http = null)
     {
         _baseUrl = baseUrl.TrimEnd('/');
         _apiKey = apiKey;
         _model = model;
-        _tools = tools;
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
     }
 
@@ -166,27 +162,10 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             ["stream"] = stream,
         };
 
-        // 工具声明来自宿主冻结的描述符，不走 options.Tools：
-        // M.E.AI 10.11.0 的 AITool 无法子类化，且真正的 schema 权威在 dispatcher。
-        if (_tools?.ToolDeclarations is { Count: > 0 } declarations)
-        {
-            var tools = new JsonArray();
-            foreach (var tool in declarations)
-            {
-                tools.Add(new JsonObject
-                {
-                    ["type"] = "function",
-                    ["function"] = new JsonObject
-                    {
-                        ["name"] = tool.Name,
-                        ["description"] = tool.Description,
-                        ["parameters"] = ToolSchema.ToNode(tool.InputSchema),
-                    },
-                });
-            }
-
-            body["tools"] = tools;
-        }
+        // 工具声明由运行时通过 ChatOptions 附加属性传入，连接器只负责序列化。
+        var declarations = options.ReadToolDeclarations();
+        if (declarations.Count > 0)
+            body["tools"] = ToolDeclarations.ToOpenAiToolsArray(declarations);
 
         return body;
     }

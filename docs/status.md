@@ -85,8 +85,9 @@
 - [ ] 唯一 dispatcher：schema/参数规范化、审批身份绑定、执行前校验、调用去重、资源冲突和取消终态。
   - 已实现（`src/Dougong.Agent/ToolDispatcher.cs`）：最小 JSON schema 校验（顶层 type 与 required）、
     调用 ID 去重、权限描述采集、七种明确终态、旁路检测用的调用记录、冻结工具声明的对外投影。
-  - **待补契约**：运行时应把 dispatcher 的冻结描述符交给连接器，而不是由循环拼系统提示文本；
-    当前 `IToolDeclarationSource` 只是对比工程里的临时形态。
+  - **工具声明通道已落地**：`Dougong.Agent.ToolDeclarations` 通过 `ChatOptions` 附加属性
+    （键 `dougong.toolDeclarations`）传递冻结描述符，运行时与连接器解耦；
+    附 6 项契约自检（`-- contract`）。
   - **未实现**：审批流程、资源锁与工作区独占、执行前文件版本复核、完整 schema 校验器。
     因此当前不得宣称具备“批准 A 执行 B”的防护。
 - [ ] 显式存储提交、单写者租约、半条尾记录处理、结果未知恢复、分支一致切面及预算/压缩失败协议。

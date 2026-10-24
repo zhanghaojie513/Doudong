@@ -235,5 +235,8 @@ dotnet run --project spike/Dougong.Agent.Comparison -c Release --no-build -- liv
 
 - `Dougong.Agent` 的契约（`IAgentRuntime`/`IToolDispatcher`/`IAgentTool`）保持不变，两种实现都能满足。
 - 正式实现走候选 B；`spike/` 目录保留作为回归基线，M1 稳定后可删除。
-- **契约需要补一个正式接口**：运行时应把 dispatcher 的冻结描述符交给连接器，而不是由循环拼系统提示。当前 `IToolDeclarationSource` 只是对比工程里的临时形态。
+- **工具声明通道已正式化**：`Dougong.Agent.ToolDeclarations` 用 `ChatOptions.AdditionalProperties`
+  的约定键（`dougong.toolDeclarations`）让运行时写、连接器读，双方只共享冻结的
+  `ToolDescriptor`，互不依赖具体实现。同时提供 `ToOpenAiToolsArray` 避免每个连接器各写一遍。
+  契约自检（`-- contract`，6 项）覆盖往返、缺省值、schema 独立解析与 OpenAI 形状。
 - 下一步应在自研循环上补齐：审批、资源锁、JSONL 提交屏障、上下文压缩。

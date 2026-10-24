@@ -30,8 +30,11 @@ public sealed class LoopAgentRuntime(IChatClient client, IToolDispatcher dispatc
             var calls = new List<PendingCall>();
             var fragmentCount = new Dictionary<string, int>(StringComparer.Ordinal);
 
+            // 工具声明是运行时对连接器的正式输出，不是循环拼的提示文本。
+            var chatOptions = new ChatOptions().Attach(dispatcher.Tools);
+
             await using var enumerator = client
-                .GetStreamingResponseAsync(history, null, cancellationToken)
+                .GetStreamingResponseAsync(history, chatOptions, cancellationToken)
                 .GetAsyncEnumerator(cancellationToken);
 
             while (true)
