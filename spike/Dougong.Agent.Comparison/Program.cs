@@ -12,6 +12,9 @@ public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args.FirstOrDefault() == "live")
+            return await LiveRun.RunAsync();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 
@@ -86,6 +89,7 @@ public static class Scenarios
     public static IEnumerable<Scenario> All()
     {
         yield return FragmentedArguments();
+        yield return NestedArguments();
         yield return MultipleTools();
         yield return DuplicateInvocationId();
         yield return MissingInvocationId();
@@ -112,6 +116,21 @@ public static class Scenarios
         ],
         [new FakeTool("read", ["path"])],
         "应成功执行一次");
+
+    // 1b. 嵌套/数组参数：只有按原文解析才能保持结构，按键合并会把嵌套拍平。
+    private static Scenario NestedArguments() => new(
+        "nested-arguments",
+        "参数含嵌套对象与数组，聚合后必须保持原结构",
+        [
+            new ScriptedTurn(
+                new ScriptedUpdate(FunctionCallId: "c1", FunctionName: "write",
+                    ArgumentsJson: "{}"),
+                new ScriptedUpdate(FunctionCallId: "c1", FunctionName: "write",
+                    ArgumentsJson: "{\"path\":\"a.txt\",\"lines\":[\"one\",\"two\"],\"meta\":{\"eol\":\"lf\"}}")),
+            new ScriptedTurn(new ScriptedUpdate(Text: "done")),
+        ],
+        [new FakeTool("write", ["path"])],
+        "应成功执行且参数保持嵌套结构");
 
     // 2. 同批多个工具。
     private static Scenario MultipleTools() => new(

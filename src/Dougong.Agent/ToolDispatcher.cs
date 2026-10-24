@@ -31,6 +31,13 @@ public sealed class ToolDispatcher : IToolDispatcher
         get { lock (_sync) { return [.. _tools.Values.Select(r => r.Descriptor)]; } }
     }
 
+    /// <summary>
+    /// 把已注册工具的冻结描述符投影为模型可见的工具声明。
+    /// 这是唯一合法的"告知模型有哪些工具"的通道：schema 由宿主冻结，
+    /// 执行仍必须回到 <see cref="DispatchAsync"/>，不存在模型侧直接执行路径。
+    /// </summary>
+    public IReadOnlyList<ToolDescriptor> ModelVisibleTools => Tools;
+
     public IDisposable Register(IAgentTool tool)
     {
         ArgumentNullException.ThrowIfNull(tool);

@@ -24,6 +24,12 @@ public static class ScenarioExpectations
 
         switch (scenario.Name)
         {
+            case "nested-arguments":
+                var nested = completions.FirstOrDefault();
+                if (nested is null || nested.Outcome != ToolCallOutcome.Succeeded)
+                    return $"期望成功，实际 {nested?.Outcome.ToString() ?? "无调用"}";
+                return null;
+
             case "fragmented-arguments":
                 // 参数分片：必须聚合完整后才派发，且成功。
                 return completions.Count switch

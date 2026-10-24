@@ -25,11 +25,6 @@ public sealed class LoopAgentRuntime(IChatClient client, IToolDispatcher dispatc
 
         for (var round = 0; round < request.MaxToolRounds; round++)
         {
-            // 工具 schema 以系统消息注入：AITool 在 10.11.0 无法子类化，
-            // 而候选 B 的定位正是"模型只产出描述，宿主自己执行"。
-            if (dispatcher.Tools.Count > 0)
-                history.Add(new ChatMessage(ChatRole.System, DescribeTools(dispatcher.Tools)));
-
             // 聚合本轮流式输出：文本直接投影，函数调用按 ID 收集完整参数。
             var text = new StringBuilder();
             var calls = new List<PendingCall>();
@@ -80,22 +75,32 @@ public sealed class LoopAgentRuntime(IChatClient client, IToolDispatcher dispatc
                             break;
 
                         case FunctionCallContent functionCall:
-                            // 同一 ID 的分片累积：参数按 key 合并，后到片段覆盖同名 key。
+                            // 参数分片的真相：provider（GLM/Anthropic）逐段给出
+                            // input_json_delta.partial_json，是字节片段而非解析后的字典。
+                            // M.E.AI 的 Arguments 是已解析字典，取不到原始片段，
+                            // 因此这里保留"最近一次完整字典快照"的序列化原文，
+                            // 并在派发前重新解析——语义等价于拼接后解析。
                             var id = functionCall.CallId;
                             if (string.IsNullOrEmpty(id))
                             {
                                 calls.Add(new PendingCall(string.Empty, functionCall.Name,
-                                    [], IsMalformed: true));
+                                    [], IsMalformed: true, Fragments: null));
                                 break;
                             }
 
                             fragmentCount[id] = fragmentCount.GetValueOrDefault(id) + 1;
+                            var fragment = functionCall.Arguments is null
+                                ? null
+                                : JsonSerializer.Serialize(functionCall.Arguments);
                             var existing = calls.FindIndex(c => c.Id == id);
                             if (existing < 0)
                             {
                                 calls.Add(new PendingCall(id, functionCall.Name,
-                                    functionCall.Arguments is null ? [] : new Dictionary<string, object?>(functionCall.Arguments),
-                                    IsMalformed: false));
+                                    functionCall.Arguments is null
+                                        ? []
+                                        : new Dictionary<string, object?>(functionCall.Arguments),
+                                    IsMalformed: false,
+                                    Fragments: fragment ?? "{}"));
                             }
                             else
                             {
@@ -105,14 +110,19 @@ public sealed class LoopAgentRuntime(IChatClient client, IToolDispatcher dispatc
                                         if (merged.TryGetValue(pair.Key, out var previous)
                                             && !Equals(previous, pair.Value))
                                         {
-                                            // 同一键被赋予不同值：这是冲突而不是分片。
+                                            // 同一键被赋予不同值：冲突而不是分片。
                                             calls[existing] = calls[existing] with { IsMalformed = true };
                                         }
                                         else
                                         {
                                             merged[pair.Key] = pair.Value;
                                         }
-                                calls[existing] = calls[existing] with { Arguments = merged };
+
+                                calls[existing] = calls[existing] with
+                                {
+                                    Arguments = merged,
+                                    Fragments = fragment ?? calls[existing].Fragments,
+                                };
                             }
 
                             break;
@@ -168,7 +178,9 @@ public sealed class LoopAgentRuntime(IChatClient client, IToolDispatcher dispatc
             var toolResults = new List<string>();
             foreach (var call in calls)
             {
-                var args = JsonSerializer.SerializeToElement(call.Arguments);
+                // 用累积片段的原文重新解析，而不是直接序列化字典：
+                // 这样能真实反映 provider 给出的 JSON（含嵌套、数组、数字精度）。
+                var args = ParseArguments(call);
 
                 yield return new AgentEvent.ToolCallRequested(call.Id, call.ToolId, args);
 
@@ -200,14 +212,29 @@ public sealed class LoopAgentRuntime(IChatClient client, IToolDispatcher dispatc
     };
 
     private sealed record PendingCall(
-        string Id, string ToolId, Dictionary<string, object?> Arguments, bool IsMalformed);
+        string Id,
+        string ToolId,
+        Dictionary<string, object?> Arguments,
+        bool IsMalformed,
+        string? Fragments);
 
-    private static string DescribeTools(IReadOnlyList<ToolDescriptor> tools)
+    /// <summary>
+    /// 把累积的片段原文解析为 JsonElement；失败则退回字典序列化。
+    /// 片段为 null 表示参数从未到达（应判为不完整）。
+    /// </summary>
+    private static JsonElement ParseArguments(PendingCall call)
     {
-        var sb = new StringBuilder("可用工具：");
-        foreach (var tool in tools)
-            sb.AppendLine().Append(
-                $"- {tool.Name} (id={tool.Id})：{tool.Description}；schema={tool.InputSchema.GetRawText()}");
-        return sb.ToString();
+        if (call.Fragments is { } raw)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(raw);
+                return doc.RootElement.Clone();
+            }
+            catch (JsonException) { }
+        }
+
+        return JsonSerializer.SerializeToElement(call.Arguments);
     }
+
 }
