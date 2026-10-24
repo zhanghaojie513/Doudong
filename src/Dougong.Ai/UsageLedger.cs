@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.AI;
 
 namespace Dougong.Ai;
@@ -246,14 +247,41 @@ public sealed class UsageRecordingChatClient(
     private void Record(
         DateTimeOffset started, UsageDetails? usage, bool succeeded, string? failure)
     {
+        var elapsed = _clock() - started;
+
         ledger.Add(sessionId, new UsageRecord(
             provider, model, protocol,
             usage?.InputTokenCount,
             usage?.OutputTokenCount,
             usage?.TotalTokenCount,
-            _clock() - started,
+            elapsed,
             succeeded,
             failure));
+
+        // 同一份事实同时投递到标准计量出口。标签只放低基数维度：
+        // provider / model / protocol / result。会话 ID 属于日志，不属于指标。
+        var tags = new TagList
+        {
+            { DougongTelemetry.ProviderTag, provider },
+            { DougongTelemetry.ModelTag, model },
+            { DougongTelemetry.ProtocolTag, protocol.ToString() },
+            { DougongTelemetry.ResultTag, succeeded ? "success" : "failure" },
+        };
+
+        DougongTelemetry.Calls.Add(1, tags);
+        DougongTelemetry.CallDuration.Record(elapsed.TotalMilliseconds, tags);
+
+        // 未报告与零消耗必须可区分：前者计到单独的计数器，不记 token。
+        if (usage?.InputTokenCount is null && usage?.OutputTokenCount is null)
+        {
+            DougongTelemetry.UnreportedCalls.Add(1, tags);
+            return;
+        }
+
+        if (usage.InputTokenCount is { } input)
+            DougongTelemetry.InputTokens.Record(input, tags);
+        if (usage.OutputTokenCount is { } output)
+            DougongTelemetry.OutputTokens.Record(output, tags);
     }
 
     private static string Describe(Exception ex) => $"{ex.GetType().Name}: {ex.Message}";

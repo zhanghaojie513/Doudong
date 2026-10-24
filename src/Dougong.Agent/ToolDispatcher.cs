@@ -219,6 +219,15 @@ public sealed class ToolDispatcher : IToolDispatcher
 
         using (lease)
         {
+            // 复核的第一件事：这个注册是否仍是当前生效的那一个。
+            // 审批窗口内工具可能被注销并替换（MCP 的 list_changed 随时会到），
+            // 此时手中的 registration 是过期对象——继续用它会"批准了 A、执行了 B"。
+            if (!IsCurrentRegistration(registration, invocation.ToolId))
+                return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
+                    ToolCallOutcome.RejectedNotApproved,
+                    Diagnostic: "执行前复核不通过：该工具在审批期间已被注销或替换，请重新审批。",
+                    Permission: permission);
+
             if (!approvalIsStillValid(registration, invocation, permission, execution, binding, out var staleReason))
                 return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
                     ToolCallOutcome.RejectedNotApproved,
@@ -383,6 +392,23 @@ public sealed class ToolDispatcher : IToolDispatcher
         catch (Exception ex)
         {
             return $"{ex.GetType().Name}: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// 该注册是否仍是 dispatcher 中"当前生效"的那一个。
+    /// </summary>
+    /// <remarks>
+    /// 只比较引用是否相同：同名工具被重新注册后是**另一个** Registration 对象，
+    /// 即使 schema 未变也必须重新审批——否则无法证明用户批准的是当前这一份实现。
+    /// </remarks>
+    private bool IsCurrentRegistration(Registration registration, string toolId)
+    {
+        lock (_sync)
+        {
+            if (_tools.TryGetValue(toolId, out var current) && ReferenceEquals(current, registration))
+                return true;
+            return _aliases.TryGetValue(toolId, out var alias) && ReferenceEquals(alias, registration);
         }
     }
 

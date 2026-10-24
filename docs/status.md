@@ -272,7 +272,19 @@
     这条只有真实端点能发现——假模型不校验工具名字符集。
   - **工具名必须跨 server 唯一**：两个 server 各自暴露 `alpha` 时，若模型可见名称相同，
     模型无法区分，dispatcher 的 Name 别名也只能指向一个。因此 Id 与 Name 都带 server 前缀。
-  - **未实现**：MCP resources/prompts、HTTP transport、断线重连、ACP 全部。
+  - **指标导出已实现**（`src/Dougong.Ai/DougongTelemetry.cs`）：基于 BCL 的
+    `System.Diagnostics.Metrics.Meter`，不直接引 `OpenTelemetry` 包——SDK 只发布到
+    标准出口，谁来采集由宿主决定。5 项验收（`-- telemetry`）用 `MeterListener`
+    验证真实调用后确实产生计量。
+  - 计量：`calls`（按 result 标签分成功/失败）、`duration`、`input_tokens`、
+    `output_tokens`、`unreported_calls`。**未报告用量单独计数而不是记成 0**——
+    后端看到"0 tokens"会读成"这次调用免费"，真相却是"不知道花了多少"。
+  - 标签只有 provider / model / protocol / result，**刻意不含会话 ID 或调用 ID**：
+    高基数维度会让后端时间序列数量爆炸。会话级归属属于日志，不属于指标。
+  - 真实端点验证：DeepSeek 一次调用产出
+    `calls=1, duration=2171ms, input_tokens=35, output_tokens=13`，与账本一致。
+  - **未实现**：MCP resources/prompts、HTTP transport、断线重连、ACP；
+    OTel exporter（宿主自行接 `OpenTelemetry` 的 meter provider，SDK 不代劳）。
 - [ ] M2 L1 默认候选待审；受限自动启用需用户选择，来源/作用域/撤销/隐私双数据流和最小留出评测齐备。
 - [ ] M3 API/行为兼容、作者模板和卸载测试稳定化；完整 Skill 进化和评测优化按验证结果后续建设。
 
@@ -350,6 +362,12 @@
   9 项自检通过（含反证）；等待审批期间不持锁，避免慢审批阻塞工作区。
 - 2026-10-24：M1 提交屏障：`IAgentStore` 契约与 JSONL 实现，四个提交落点串起
   "先提交意图、再产生副作用"；6 项自检通过，并用移除屏障的反证确认测试有效。
+- 2026-10-24：M2.3 指标导出：DougongTelemetry 基于 BCL Meter，5 项验收
+  （未报告与零可区分、失败带 result 标签、无高基数标签）。真实端点确认产出。
+  另做修复复检（-- recheck 4 项），抓到 3 个上轮没覆盖的缺陷：
+  审批窗口内工具替换后旧审批仍放行（真缺陷，已修）、联合类型 schema 被静默跳过、
+  布尔形态 exclusiveMinimum 直接抛异常。
+
 - 2026-10-24：清掉 G4/G6/G8 三项遗留（触发条件均由 M2 满足）：
   G4 完整 schema 校验（不支持关键字必须报错）、G6 工具替换后旧审批失效（4 项）、
   G8 token 估算按实测校准（ASCII 8 字符/token、CJK 1.2，改分段模型）。

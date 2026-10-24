@@ -69,6 +69,12 @@ public static class Program
         if (args.FirstOrDefault() == "token")
             return TokenEstimateChecks.Run();
 
+        if (args.FirstOrDefault() == "recheck")
+            return await FixRecheckChecks.RunAsync();
+
+        if (args.FirstOrDefault() == "telemetry")
+            return await TelemetryChecks.RunAsync();
+
         // 供端到端测试使用的最小 stdio MCP server。
         if (args.FirstOrDefault() == "mcp-server")
             return await McpTestServer.RunAsync();

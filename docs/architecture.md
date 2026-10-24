@@ -334,6 +334,15 @@ public sealed record AgentToolResult(JsonElement Content, JsonElement? Details =
 
 OTel 三类 Span（LLM 调用、工具执行、插件生命周期）+ 用量 Metrics；交互宿主可用 console exporter，ACP stdio 模式必须改写 stderr 或独立出口，禁止污染协议 stdout。
 
+**M2.3 实现要点**：指标基于 BCL 的 `System.Diagnostics.Metrics.Meter` 发布到标准出口，SDK **不直接依赖 `OpenTelemetry` 包**——`Meter` 是 .NET 内置的计量 API，OTel 是它的消费者；谁采集由宿主决定，SDK 不必把某个可观测后端变成自己的依赖。
+
+计量：`dougong.llm.calls`（按 `result` 标签区分成功/失败）、`dougong.llm.duration`、`dougong.llm.input_tokens`、`dougong.llm.output_tokens`、`dougong.llm.unreported_calls`。两条设计约束：
+
+- **未报告用量单独计数，不记成 0 token**：后端看到"0 tokens"会读成"这次调用免费"，而真相是"不知道花了多少"。
+- **标签只放低基数维度**（provider / model / protocol / result），不含会话 ID 或调用 ID：高基数维度会让后端时间序列数量爆炸。会话级归属属于日志，不属于指标。
+
+计量名称与单位一旦发布即对外契约，集中定义在 `DougongTelemetry`，不散落在调用点。
+
 ## 6. 宿主与进程模型
 
 ```text

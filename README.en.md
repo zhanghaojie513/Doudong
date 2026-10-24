@@ -98,7 +98,7 @@ Dougong focuses on the **supporting layer** for agents — not on any particular
 |---|---|---|
 | `Dougong.Kernel` | Lifecycle, services, events, dependency graph, dynamic loading | M0 closed (156 tests + 13 probes) |
 | `Dougong.Agent` | Agent runtime contracts, loop, sessions, tools, approval | M1 main body implemented |
-| `Dougong.Ai` | Three wire-protocol connectors, `ChatClientFactory` | M1 implemented; usage accounting pending |
+| `Dougong.Ai` | Three wire-protocol connectors, `ChatClientFactory`, usage accounting, metrics | M2.3 implemented |
 | `Dougong.Mcp` | MCP server ↔ agent tool bridge | Skeleton (M2) |
 | `Dougong.Acp` | ACP agent-side adapter | Skeleton (M2) |
 | `Dougong.Cli` | Headless reference host | Runnable; three protocols, session resume/branch, compaction |

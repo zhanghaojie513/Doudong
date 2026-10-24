@@ -76,11 +76,37 @@ public static class ToolSchemaValidator
             }
         }
 
-        if (schema.TryGetProperty("type", out var type)
-            && type.ValueKind is JsonValueKind.String)
+        if (schema.TryGetProperty("type", out var type))
         {
-            var expected = type.GetString()!;
-            if (!MatchesType(expected, value, path, out var typeError)) return typeError;
+            // type 可以是字符串或字符串数组（联合类型）。数组形态是合法 JSON Schema，
+            // 曾经只处理字符串形态，导致 ["string","null"] 这类 schema 完全不校验。
+            if (type.ValueKind is JsonValueKind.String)
+            {
+                if (!MatchesType(type.GetString()!, value, path, out var typeError)) return typeError;
+            }
+            else if (type.ValueKind is JsonValueKind.Array)
+            {
+                var matched = false;
+                var names = new List<string>();
+                foreach (var candidate in type.EnumerateArray())
+                {
+                    if (candidate.ValueKind is not JsonValueKind.String) continue;
+                    var name = candidate.GetString()!;
+                    names.Add(name);
+                    if (MatchesType(name, value, path, out _)) matched = true;
+                }
+
+                if (names.Count == 0)
+                    return $"{At(path)}schema 的 type 数组为空或元素不是字符串。";
+
+                if (!matched)
+                    return $"{At(path)}类型应为 {string.Join(" 或 ", names)}，"
+                        + $"实际为 {DescribeKind(value.ValueKind)}。";
+            }
+            else
+            {
+                return $"{At(path)}schema 的 type 既不是字符串也不是数组，无法校验。";
+            }
         }
 
         // const 优先于 enum：两者同时存在时 const 更严格。
@@ -167,13 +193,37 @@ public static class ToolSchemaValidator
             && number > maxValue)
             return $"{At(path)}必须 ≤ {maxValue}，实际为 {number}。";
 
-        if (schema.TryGetProperty("exclusiveMinimum", out var exclMin)
-            && exclMin.TryGetDecimal(out var exclMinValue) && number <= exclMinValue)
-            return $"{At(path)}必须 > {exclMinValue}，实际为 {number}。";
+        if (schema.TryGetProperty("exclusiveMinimum", out var exclMin))
+        {
+            if (exclMin.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                // draft-4 形态：exclusiveMinimum 是布尔值，含义是"minimum 是否排他"。
+                // 曾经因为读不成数字就跳过，等于静默放宽了约束。
+                if (exclMin.ValueKind is JsonValueKind.True
+                    && schema.TryGetProperty("minimum", out var bound)
+                    && bound.TryGetDecimal(out var boundValue) && number <= boundValue)
+                    return $"{At(path)}必须 > {boundValue}（exclusiveMinimum），实际为 {number}。";
+            }
+            else if (exclMin.TryGetDecimal(out var exclMinValue) && number <= exclMinValue)
+            {
+                return $"{At(path)}必须 > {exclMinValue}，实际为 {number}。";
+            }
+        }
 
-        if (schema.TryGetProperty("exclusiveMaximum", out var exclMax)
-            && exclMax.TryGetDecimal(out var exclMaxValue) && number >= exclMaxValue)
-            return $"{At(path)}必须 < {exclMaxValue}，实际为 {number}。";
+        if (schema.TryGetProperty("exclusiveMaximum", out var exclMax))
+        {
+            if (exclMax.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                if (exclMax.ValueKind is JsonValueKind.True
+                    && schema.TryGetProperty("maximum", out var bound)
+                    && bound.TryGetDecimal(out var boundValue) && number >= boundValue)
+                    return $"{At(path)}必须 < {boundValue}（exclusiveMaximum），实际为 {number}。";
+            }
+            else if (exclMax.TryGetDecimal(out var exclMaxValue) && number >= exclMaxValue)
+            {
+                return $"{At(path)}必须 < {exclMaxValue}，实际为 {number}。";
+            }
+        }
 
         return null;
     }

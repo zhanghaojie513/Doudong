@@ -19,7 +19,7 @@ echo "== 内核测试 =="
 
 echo
 echo "== 自检套件 =="
-suites="token schema tool-replacement mcp mcp-reload reachability approval-log wiring wire session usage shell failure store approval fileversion compaction contract"
+suites="telemetry recheck token schema tool-replacement mcp mcp-reload reachability approval-log wiring wire session usage shell failure store approval fileversion compaction contract"
 
 failed=0
 failed_names=""

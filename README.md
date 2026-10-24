@@ -97,7 +97,7 @@ Dougong 关注的是 Agent 的**承托层**，而不是某一个模型或某一�
 |---|---|---|
 | `Dougong.Kernel` | 生命周期、服务、事件、依赖图、动态加载 | M0 已关闭（156 测试 + 13 探测） |
 | `Dougong.Agent` | Agent 运行契约、循环、会话、工具和审批 | M1 主体已实现 |
-| `Dougong.Ai` | 三种线协议连接器、`ChatClientFactory`、用量记账 | M1 已实现（OTel 导出属 M2） |
+| `Dougong.Ai` | 三种线协议连接器、`ChatClientFactory`、用量记账、指标导出 | M2.3 已实现 |
 | `Dougong.Mcp` | MCP 工具桥接与变化检测 | M2.1/M2.2 已实现 |
 | `Dougong.Acp` | ACP Agent 端适配 | 骨架（M2） |
 | `Dougong.Cli` | headless 参考宿主 | 可运行，三种协议、会话恢复与分支、压缩 |
