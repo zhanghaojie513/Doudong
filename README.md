@@ -5,6 +5,10 @@
 </p>
 
 <p align="center">
+  <span>简体中文</span> · <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
   用可组合的插件内核，承托 Agent 运行时、工具、协议与宿主。
 </p>
 
