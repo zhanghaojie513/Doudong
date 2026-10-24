@@ -75,6 +75,9 @@ public static class Program
         if (args.FirstOrDefault() == "telemetry")
             return await TelemetryChecks.RunAsync();
 
+        if (args.FirstOrDefault() == "acp")
+            return await AcpChecks.RunAsync();
+
         // 供端到端测试使用的最小 stdio MCP server。
         if (args.FirstOrDefault() == "mcp-server")
             return await McpTestServer.RunAsync();

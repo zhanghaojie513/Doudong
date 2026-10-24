@@ -330,6 +330,12 @@ public sealed record AgentToolResult(JsonElement Content, JsonElement? Details =
 | permission 请求（Agent→Client） | 审批流（客户端弹窗 = 审批器插件的一种） |
 | `session/cancel` | linked CancellationToken 取消 |
 
+**M2.4 实现要点**：`AcpAgentHost` 是 Agent 端的 stdio 宿主。分帧是**按行（LF 分隔）、没有 Content-Length 头**——与常见的 JSON-RPC 分帧不同，也与 MCP 传输层不同，搞错会表现为"对端永远不回消息"。四条来自真实实现的容错：单行无长度上限（diff/图片可达数 MB）用可增长缓冲 + 64 MiB 保护；无法解析的行**跳过而非断连**（有些 Agent 启动时往 stdout 打横幅），连续 100 行才判损坏；请求 id 可为 int 或 string，回复**原样回传**；双向 id 空间独立。
+
+**长请求不能阻塞读循环**（实测缺陷）：`session/prompt` 要跑完整轮，若在读循环里 await，后续的 `session/cancel` 通知根本读不到，取消永远无效。因此长请求登记到待完成表后立即继续读取，异常单独观察。
+
+**stdout 只归协议**：任何日志必须走 stderr。这条有专门的验收项——逐行检查 host 输出都能解析为 JSON。
+
 ### 5.4 遥测
 
 OTel 三类 Span（LLM 调用、工具执行、插件生命周期）+ 用量 Metrics；交互宿主可用 console exporter，ACP stdio 模式必须改写 stderr 或独立出口，禁止污染协议 stdout。

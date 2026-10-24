@@ -41,7 +41,7 @@ Dougong 目前处于 **实验性 Alpha 阶段**，目标框架为 `net10.0`。
 - `Dougong.Telemetry` 尚未创建
 - `Dougong.Agent` 已实现循环、提交屏障、审批、资源协调、文件版本复核、上下文压缩与 shell 工具
 - `Dougong.Ai` 已实现三种线协议连接器与 `ChatClientFactory`
-- `Dougong.Mcp`、`Dougong.Acp` 仍是骨架（M2）
+- `Dougong.Mcp` 工具桥接与变化检测、`Dougong.Acp` Agent 端最小闭环已实现（M2）
 - `Dougong.Cli` 是可运行宿主：REPL + 审批 + 工作区内读写 + JSONL 会话 + shell 工具 +
   上下文压缩，支持 resume / branch / list
 
@@ -99,8 +99,8 @@ Dougong 关注的是 Agent 的**承托层**，而不是某一个模型或某一�
 | `Dougong.Agent` | Agent 运行契约、循环、会话、工具和审批 | M1 主体已实现 |
 | `Dougong.Ai` | 三种线协议连接器、`ChatClientFactory`、用量记账、指标导出 | M2.3 已实现 |
 | `Dougong.Mcp` | MCP 工具桥接与变化检测 | M2.1/M2.2 已实现 |
-| `Dougong.Acp` | ACP Agent 端适配 | 骨架（M2） |
-| `Dougong.Cli` | headless 参考宿主 | 可运行，三种协议、会话恢复与分支、压缩 |
+| `Dougong.Acp` | ACP Agent 端（按行分帧 JSON-RPC over stdio） | M2.4 最小闭环已实现 |
+| `Dougong.Cli` | headless 参考宿主 | 可运行；REPL 与 `--acp` 两种模式 |
 | `Dougong.Telemetry` | OpenTelemetry 桥接 | 规划中 |
 
 ## 快速开始

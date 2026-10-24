@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Dougong.Agent;
 using Dougong.Ai;
+using Dougong.Acp;
 using Dougong.Mcp;
 using Microsoft.Extensions.AI;
 
@@ -35,6 +36,10 @@ public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        // ACP 模式：作为 Agent 端被外部客户端驱动，stdout 归协议所有。
+        if (args.Contains("--acp"))
+            return await RunAcpAgentAsync();
+
         if (args.Contains("--version") || args.Contains("-v"))
         {
             Console.WriteLine("dougong 0.1.0-alpha.1");
@@ -436,6 +441,96 @@ public static class Program
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// 以 ACP Agent 端运行：从 stdin 读协议帧，向 stdout 写协议帧。
+    /// </summary>
+    /// <remarks>
+    /// **日志必须走 stderr**：stdout 归协议所有，混入任何非协议内容都会破坏连接。
+    /// 因此这里的 Console.WriteLine 一律写成 Console.Error.WriteLine。
+    /// </remarks>
+    private static async Task<int> RunAcpAgentAsync()
+    {
+        var config = ChatClientFactory.FromEnvironment();
+        if (config is null)
+        {
+            Console.Error.WriteLine(
+                "ACP 模式需要 DOUGONG_PROVIDER_BASE / KEY / MODEL 环境变量。");
+            return 2;
+        }
+
+        Console.Error.WriteLine($"[acp] dougong 作为 ACP Agent 启动，模型={config.Model}");
+
+        using var client = ChatClientFactory.Create(config);
+
+        var host = new AcpAgentHost(
+            Console.OpenStandardInput(),
+            Console.OpenStandardOutput(),
+            context =>
+            {
+                // 每会话一个独立 store，与会话 ID 绑定。
+                var sessionDir = Environment.GetEnvironmentVariable("DOUGONG_SESSION_DIR")
+                    ?? Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                        ".dougong", "sessions");
+
+                // 同步打开 store：ACP 首版不引入异步工厂复杂度，
+                // 失败时用内存态代替（并在 stderr 说明）。
+                var store = TryOpenSessionStore(sessionDir, context.SessionId);
+                return new LoopAgentRuntime(client, BuildDispatcher(context, store), store);
+            },
+            context => BuildDispatcher(context, null));
+
+        await host.RunAsync();
+        return 0;
+    }
+
+    private static IToolDispatcher BuildDispatcher(AcpSessionContext context, IAgentStore? store) =>
+        new ToolDispatcher(
+            // 审批交给 ACP 客户端：权限请求是协议的一部分，不是控制台交互。
+            new StdinApprover(),
+            new ToolResourceGate(),
+            context.SessionId, "turn-1", context.Workspace,
+            TimeSpan.FromMinutes(5),
+            new WorkspacePathGuard(context.Workspace),
+            store);
+
+    private static IAgentStore? TryOpenSessionStore(string directory, string sessionId)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, $"{sessionId}.jsonl");
+            return JsonlAgentStore.OpenAsync(path, sessionId).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[acp] 会话存储打开失败，改用无持久化：{ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// ACP 模式下的兜底审批器：真正的权限请求由 AcpApprover 发出。
+    /// </summary>
+    /// <remarks>
+    /// 这里的实现是为了让 dispatcher 在没有协议审批通道时**默认拒绝**，
+    /// 而不是默认放行。ACP 首版尚未把 AcpApprover 接到 dispatcher 上
+    /// （它需要 host 实例，装配顺序见 plan.md），因此当前行为是拒绝所有需审批的调用，
+    /// 并在 stderr 说明原因——这比静默放行安全。
+    /// </remarks>
+    private sealed class StdinApprover : IToolApprover
+    {
+        public ValueTask<ToolApprovalDecision> RequestApprovalAsync(
+            ToolApprovalRequest request, CancellationToken cancellationToken = default)
+        {
+            Console.Error.WriteLine(
+                $"[acp] 拒绝工具调用 '{request.Tool.Name}'："
+                + "ACP 首版尚未把权限请求接到客户端（见 plan.md M2.4 剩余项）。");
+            return ValueTask.FromResult(
+                ToolApprovalDecision.Deny("ACP 首版尚未实现客户端权限请求，按拒绝处理。"));
+        }
     }
 
     /// <summary>

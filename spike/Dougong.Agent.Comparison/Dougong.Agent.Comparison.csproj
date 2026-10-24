@@ -16,6 +16,7 @@
     <ProjectReference Include="..\..\src\Dougong.Agent\Dougong.Agent.csproj" />
     <ProjectReference Include="..\..\src\Dougong.Ai\Dougong.Ai.csproj" />
     <ProjectReference Include="..\..\src\Dougong.Mcp\Dougong.Mcp.csproj" />
+    <ProjectReference Include="..\..\src\Dougong.Acp\Dougong.Acp.csproj" />
   </ItemGroup>
 
 </Project>

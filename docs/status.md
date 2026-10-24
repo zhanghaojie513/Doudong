@@ -272,6 +272,19 @@
     这条只有真实端点能发现——假模型不校验工具名字符集。
   - **工具名必须跨 server 唯一**：两个 server 各自暴露 `alpha` 时，若模型可见名称相同，
     模型无法区分，dispatcher 的 Name 别名也只能指向一个。因此 Id 与 Name 都带 server 前缀。
+  - **ACP Agent 端已实现**（`src/Dougong.Acp`）：按行分帧（无 Content-Length）、
+    JSON-RPC 2.0 双向 id、`initialize` 版本协商、`session/new`、`session/prompt`、
+    `session/cancel`、5 种 `session/update` 翻译、`AcpApprover` 权限请求。
+    10 项验收（`-- acp`）用真实流配对驱动，含三个硬约束：**stdout 只含协议帧**、
+    所有 update 先于 prompt 响应、未实现的 session 方法显式报错而非静默成功。
+  - **修掉一个真缺陷**：`session/prompt` 会跑完整轮，原先在同一个读循环里 await，
+    导致后续 `session/cancel` 通知读不到，取消永远无效。改为长请求登记后立即继续读取。
+    反证：改回阻塞等待，取消检查立刻失败。
+  - 真实进程级验证：外部客户端驱动 `dougong --acp`，initialize → session/new →
+    session/prompt 拿到 4 条 update、文本正确、`end_turn`。
+  - **未实现**：`session/load`/`resume`/`list`/`close`（显式返回 -32601 并给出替代做法）、
+    `fs/*`、`terminal`、`elicitation`、`plan`；`AcpApprover` 尚未接入 CLI 的 dispatcher
+    （当前 ACP 模式下需审批的调用一律拒绝，并在 stderr 说明）。
   - **指标导出已实现**（`src/Dougong.Ai/DougongTelemetry.cs`）：基于 BCL 的
     `System.Diagnostics.Metrics.Meter`，不直接引 `OpenTelemetry` 包——SDK 只发布到
     标准出口，谁来采集由宿主决定。5 项验收（`-- telemetry`）用 `MeterListener`
@@ -362,6 +375,11 @@
   9 项自检通过（含反证）；等待审批期间不持锁，避免慢审批阻塞工作区。
 - 2026-10-24：M1 提交屏障：`IAgentStore` 契约与 JSONL 实现，四个提交落点串起
   "先提交意图、再产生副作用"；6 项自检通过，并用移除屏障的反证确认测试有效。
+- 2026-10-24：M2.4 ACP Agent 端：按行分帧、版本协商、session/new / prompt / cancel、
+  5 种 update 翻译、权限请求适配；10 项验收（含 stdout 纯净与事件顺序）。
+  修掉一个真缺陷：session/prompt 在读循环里阻塞，导致 cancel 通知读不到。
+  CLI 加 --acp 模式，真实进程级验证通过。
+
 - 2026-10-24：M2.3 指标导出：DougongTelemetry 基于 BCL Meter，5 项验收
   （未报告与零可区分、失败带 result 标签、无高基数标签）。真实端点确认产出。
   另做修复复检（-- recheck 4 项），抓到 3 个上轮没覆盖的缺陷：
