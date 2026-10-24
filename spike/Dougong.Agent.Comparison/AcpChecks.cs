@@ -33,6 +33,9 @@ public static class AcpChecks
         failures += await CheckAsync("request-id-type-is-preserved", IdTypeAsync);
         failures += await CheckAsync("stdout-carries-only-protocol-frames", StdoutPurityAsync);
         failures += await CheckAsync("string-id-request-gets-string-response", StringIdAsync);
+        failures += await CheckAsync("approval-goes-through-protocol", ApprovalViaProtocolAsync);
+        failures += await CheckAsync("client-denial-blocks-execution", DenialBlocksAsync);
+        failures += await CheckAsync("unanswered-approval-is-denied", UnansweredAsync);
 
         Console.WriteLine(failures == 0
             ? "ACP: ALL PASS"
@@ -42,47 +45,118 @@ public static class AcpChecks
 
     // ── 驱动骨架 ─────────────────────────────────────────────────
 
-    /// <summary>客户端侧：向 host 写请求并从 host 读出响应/通知。</summary>
     private sealed class Harness : IAsyncDisposable
     {
         private readonly System.IO.Pipelines.Pipe _toHost = new();
         private readonly System.IO.Pipelines.Pipe _fromHost = new();
         private readonly CancellationTokenSource _stop = new();
-        private readonly StringBuilder _stdout = new();
-        private readonly List<string> _logs = [];
         private readonly Task _loop;
-        private readonly AcpAgentHost _host;
-        private readonly Stream _hostToClient;
         private readonly StreamReader _reader;
+        private readonly Stream _clientToHost;
+        private readonly SemaphoreSlim _writeLock = new(1, 1);
+        // 单读泵 + 队列：并发读同一 StreamReader 会冲突，而两个测试步骤
+        // （等响应 / 等权限请求）又必须能独立消费消息，因此统一由一个泵读入。
+        private readonly System.Threading.Channels.Channel<JsonNode> _inbound =
+            System.Threading.Channels.Channel.CreateUnbounded<JsonNode>();
+        private readonly JsonObject _permissionReply;
 
-        public Harness(IAgentRuntime runtime, IToolDispatcher? dispatcher = null)
+        /// <param name="runtime">直接使用的运行时；为 null 时用 client + tool 装配。</param>
+        /// <param name="replyToPermission">
+        /// false 表示**不回复**权限请求，用于测超时降级为拒绝。
+        /// </param>
+        public Harness(
+            IChatClient? client = null,
+            IAgentTool? tool = null,
+            TimeSpan? approvalTimeout = null,
+            string permissionOutcome = "allow-once",
+            bool replyToPermission = true,
+            IAgentRuntime? runtime = null)
         {
-            _host = new AcpAgentHost(
+            _permissionReply = new JsonObject
+            {
+                ["outcome"] = new JsonObject
+                {
+                    ["outcome"] = "selected",
+                    ["optionId"] = permissionOutcome,
+                },
+            };
+
+            AcpAgentHost? host = null;
+            host = new AcpAgentHost(
                 _toHost.Reader.AsStream(leaveOpen: true),
                 _fromHost.Writer.AsStream(leaveOpen: true),
-                _ => runtime,
-                _ => dispatcher ?? new ToolDispatcher(),
+                context =>
+                {
+                    if (runtime is not null)
+                        return new AcpSessionRuntime(runtime, new ToolDispatcher());
+
+                    var dispatcher = new ToolDispatcher(
+                        new AcpApprover(() => host!, context.SessionId,
+                            approvalTimeout ?? (replyToPermission
+                                ? TimeSpan.FromMinutes(5)
+                                : TimeSpan.FromMilliseconds(300))),
+                        sessionId: context.SessionId,
+                        turnId: "turn-1",
+                        workspace: context.Workspace,
+                        pathGuard: new WorkspacePathGuard(context.Workspace));
+
+                    if (tool is not null) dispatcher.Register(tool);
+
+                    return new AcpSessionRuntime(
+                        new LoopAgentRuntime(client!, dispatcher), dispatcher);
+                },
                 new StringWriter());
 
-            _loop = Task.Run(() => _host.RunAsync(_stop.Token));
-            _hostToClient = _fromHost.Reader.AsStream(leaveOpen: true);
-            // 必须复用同一个 reader：每次新建会丢掉已缓冲但未消费的字节，
-            // 表现为"只收到第一条增量"。
-            _reader = new StreamReader(_hostToClient, Encoding.UTF8, false, 8192, leaveOpen: true);
+            _loop = Task.Run(() => host.RunAsync(_stop.Token));
+            _clientToHost = _toHost.Writer.AsStream(leaveOpen: true);
+            _reader = new StreamReader(
+                _fromHost.Reader.AsStream(leaveOpen: true), Encoding.UTF8, false, 8192, leaveOpen: true);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    while (!_stop.IsCancellationRequested)
+                    {
+                        var line = await _reader.ReadLineAsync(_stop.Token);
+                        if (line is null) break;
+                        JsonNode? node;
+                        try { node = JsonNode.Parse(line); }
+                        catch (JsonException) { continue; }
+                        if (node is not null) await _inbound.Writer.WriteAsync(node);
+                    }
+                }
+                catch (OperationCanceledException) { }
+                _inbound.Writer.TryComplete();
+            });
         }
+
+        /// <summary>用现成运行时构造（不需要注入 client 与工具的用例）。</summary>
+        public Harness(IAgentRuntime runtime)
+            : this(client: null, tool: null, runtime: runtime) { }
 
         public List<JsonNode> Received { get; } = [];
 
-        /// <summary>发送一条消息（紧凑 JSON + LF）。</summary>
+        /// <summary>发送一条消息（紧凑 JSON + LF）。单写者，避免并发写同一 pipe。</summary>
         public async Task SendAsync(JsonObject message)
         {
-            var bytes = Encoding.UTF8.GetBytes(
-                message.ToJsonString(new JsonSerializerOptions { WriteIndented = false }) + "\n");
-            await _toHost.Writer.AsStream(leaveOpen: true).WriteAsync(bytes);
+            var json = message.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+            var bytes = Encoding.UTF8.GetBytes(json + "\n");
+
+            await _writeLock.WaitAsync();
+            try
+            {
+                await _clientToHost.WriteAsync(bytes);
+                await _clientToHost.FlushAsync();
+            }
+            finally { _writeLock.Release(); }
         }
 
         /// <summary>发请求并读到匹配 id 的响应，途中收到的通知进 <see cref="Received"/>。</summary>
-        public async Task<JsonNode> RequestAsync(JsonObject message, TimeSpan? timeout = null)
+        /// <param name="permissionReply">
+        /// 途中收到权限请求时的回复策略：true=批准，false=拒绝，null=不回复。
+        /// </param>
+        public async Task<JsonNode> RequestAsync(
+            JsonObject message, TimeSpan? timeout = null, bool? permissionReply = true)
         {
             await SendAsync(message);
 
@@ -91,26 +165,80 @@ public static class AcpChecks
 
             while (true)
             {
-                var node = await ReadLineAsync(cts.Token);
-                if (node is null) throw new TimeoutException("host 没有在时限内响应");
+                var node = await ReadLineAsync(cts.Token)
+                    ?? throw new TimeoutException("host 没有在时限内响应");
 
                 if (node["id"]?.ToJsonString() == id && node["method"] is null)
-                    return node;
+                {
+                    if (!SawPermissionRequest)
+                        return node;
 
-                Received.Add(node);
+                    return node;
+                }
+
+                await HandleAsync(node, permissionReply);
             }
         }
 
+        /// <summary>本次请求期间是否收到过权限请求。</summary>
+        public bool SawPermissionRequest { get; private set; }
+
+        private static string? FindOptionId(JsonNode request, string kind)
+        {
+            if (request["params"]?["options"] is not JsonArray options) return null;
+            foreach (var option in options)
+                if (option?["kind"]?.GetValue<string>() == kind)
+                    return option["optionId"]?.GetValue<string>();
+            return null;
+        }
+
+        /// <summary>处理途中收到的通知；权限请求按策略回复。</summary>
+        private async Task HandleAsync(JsonNode node, bool? permissionReply)
+        {
+            Received.Add(node);
+
+            if (node["method"]?.GetValue<string>() != "session/request_permission") return;
+            SawPermissionRequest = true;
+
+            // null 表示故意不回复，用于测「无回复必须降级为拒绝」。
+            if (permissionReply is null) return;
+
+            await SendAsync(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = node["id"]!.DeepClone(),
+                ["result"] = permissionReply.Value
+                    ? _permissionReply.DeepClone()
+                    : DenyReply(),
+            });
+        }
+
+        private static JsonObject DenyReply() => new()
+        {
+            ["outcome"] = new JsonObject
+            {
+                ["outcome"] = "selected",
+                ["optionId"] = "reject-once",
+            },
+        };
+
         private async Task<JsonNode?> ReadLineAsync(CancellationToken cancellationToken)
         {
-            var line = await _reader.ReadLineAsync(cancellationToken);
-            return line is null ? null : JsonNode.Parse(line);
+            try
+            {
+                return await _inbound.Reader.ReadAsync(cancellationToken);
+            }
+            catch (System.Threading.Channels.ChannelClosedException)
+            {
+                return null;
+            }
         }
 
         public async ValueTask DisposeAsync()
         {
             _stop.Cancel();
             try { await _loop.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
+            _writeLock.Dispose();
         }
     }
 
@@ -372,8 +500,12 @@ public static class AcpChecks
         var host = new AcpAgentHost(
             input,
             output,
-            _ => TextRuntime("hi"),
-            _ => new ToolDispatcher());
+            _ =>
+            {
+                var dispatcher = new ToolDispatcher();
+                return new AcpSessionRuntime(
+                    new LoopAgentRuntime(new FixedClient("hi"), dispatcher), dispatcher);
+            });
 
         // 让 host 读到一条完整请求后停止。
         var frame = Encoding.UTF8.GetBytes(
@@ -404,7 +536,113 @@ public static class AcpChecks
         return index == 0 ? "host 没有向 stdout 写任何东西（协议不可用）" : null;
     }
 
+    /// <summary>
+    /// 硬约束：需要审批的工具必须真的走 <c>session/request_permission</c>，
+    /// 而不是被默认拒绝或默认放行。
+    /// </summary>
+    private static async Task<string?> ApprovalViaProtocolAsync()
+    {
+        var tool = new CountingTool();
+        await using var harness = new Harness(new ToolCallingClient("c1"), tool);
+
+        return await RunApprovalScenarioAsync(
+            harness, approve: true,
+            expectExecuted: true,
+            expectPermissionRequest: true);
+    }
+
+    /// <summary>客户端拒绝后，工具绝不能执行。</summary>
+    private static async Task<string?> DenialBlocksAsync()
+    {
+        var tool = new CountingTool();
+        await using var harness = new Harness(new ToolCallingClient("c1"), tool);
+
+        var failure = await RunApprovalScenarioAsync(
+            harness, approve: false,
+            expectExecuted: false,
+            expectPermissionRequest: true);
+        if (failure is not null) return failure;
+
+        return tool.ExecutionCount == 0
+            ? null : $"客户端拒绝后工具仍执行了 {tool.ExecutionCount} 次";
+    }
+
+    /// <summary>客户端不回复时按拒绝处理，不能挂死。</summary>
+    private static async Task<string?> UnansweredAsync()
+    {
+        var tool = new CountingTool();
+        // 审批超时设短：验证「无回复必须降级为拒绝」，而不是无限等待。
+        await using var harness = new Harness(
+            new ToolCallingClient("c1"), tool,
+            approvalTimeout: TimeSpan.FromMilliseconds(300));
+
+        var failure = await RunApprovalScenarioAsync(
+            harness, approve: null,
+            expectExecuted: false,
+            expectPermissionRequest: true);
+        if (failure is not null) return failure;
+
+        return tool.ExecutionCount == 0
+            ? null : $"无回复时工具仍执行了 {tool.ExecutionCount} 次";
+    }
+
+    /// <summary>
+    /// 跑一次需要审批的对话。<paramref name="approve"/> 为 null 表示客户端不回复。
+    /// </summary>
+    private static async Task<string?> RunApprovalScenarioAsync(
+        Harness harness, bool? approve, bool expectExecuted, bool expectPermissionRequest)
+    {
+        await harness.RequestAsync(Request(1, "initialize", new JsonObject { ["protocolVersion"] = 1 }));
+        var session = await harness.RequestAsync(Request(2, "session/new", new JsonObject
+        {
+            ["cwd"] = Path.GetTempPath(),
+            ["mcpServers"] = new JsonArray(),
+        }));
+        var sessionId = session["result"]!["sessionId"]!.GetValue<string>();
+
+        // 权限请求的回复由 RequestAsync 在处理途中完成（同一消费循环），
+        // 不能另起一个任务去抢消息队列——那正是「两个消费者」的竞态。
+        var response = await harness.RequestAsync(Request(3, "session/prompt", new JsonObject
+        {
+            ["sessionId"] = sessionId,
+            ["prompt"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = "go" }),
+        }), TimeSpan.FromSeconds(30), approve);
+
+        if (expectPermissionRequest && !harness.SawPermissionRequest)
+            return "需要审批的工具没有发出 session/request_permission";
+
+        var stopReason = response["result"]?["stopReason"]?.GetValue<string>();
+        return stopReason is null ? $"prompt 失败：{response["error"]?.ToJsonString()}" : null;
+    }
+
     // ── 假客户端 ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// 把现成的 <see cref="IAgentRuntime"/> 包成 <see cref="IChatClient"/>，
+    /// 供 Harness 的统一构造路径使用。
+    /// </summary>
+    /// <remarks>
+    /// 只为复用同一套 Harness 装配，不参与真实调用。
+    /// 它返回一段固定文本，让 runtime 立即结束一轮。
+    /// </remarks>
+    private sealed class RuntimeWrapper : IChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> m, ChatOptions? o = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> m, ChatOptions? o = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "wrapped");
+        }
+
+        public object? GetService(Type t, object? k = null) => null;
+        public void Dispose() { }
+    }
+
 
     private static IEnumerable<ChatResponseUpdate> ToUpdates(string text) =>
         [new ChatResponseUpdate(ChatRole.Assistant, text)];
@@ -421,6 +659,61 @@ public static class AcpChecks
         {
             await Task.CompletedTask;
             foreach (var update in ToUpdates(text)) yield return update;
+        }
+
+        public object? GetService(Type t, object? k = null) => null;
+        public void Dispose() { }
+    }
+
+    /// <summary>记录执行次数的工具，用于验证审批是否真的拦住了执行。</summary>
+    private sealed class CountingTool : IAgentTool
+    {
+        private int _executions;
+        public int ExecutionCount => Volatile.Read(ref _executions);
+
+        public ToolDescriptor Descriptor { get; } = new(
+            "probe_tool", "probe_tool", "1.0.0", "probe",
+            JsonDocument.Parse("""{"type":"object","properties":{"x":{"type":"string"}}}""")
+                .RootElement.Clone());
+
+        public ToolPermission DescribePermission(JsonElement a) =>
+            new(ToolAccess.Read, true, [], [], []);
+        public ToolExecutionPlan DescribeExecution(JsonElement a) => ToolExecutionPlan.Serial;
+
+        public ValueTask<AgentToolResult> ExecuteAsync(
+            ToolInvocation invocation, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _executions);
+            using var document = JsonDocument.Parse("""{"ok":true}""");
+            return ValueTask.FromResult(new AgentToolResult(document.RootElement.Clone()));
+        }
+    }
+
+    /// <summary>第一轮请求工具，之后返回纯文本。</summary>
+    private sealed class ToolCallingClient(string invocationId) : IChatClient
+    {
+        private int _calls;
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> m, ChatOptions? o = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> m, ChatOptions? o = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            _calls++;
+            if (_calls == 1)
+            {
+                yield return new ChatResponseUpdate(ChatRole.Assistant,
+                    [new FunctionCallContent(invocationId, "probe_tool",
+                        new Dictionary<string, object?> { ["x"] = "value" })]);
+            }
+            else
+            {
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "done");
+            }
         }
 
         public object? GetService(Type t, object? k = null) => null;

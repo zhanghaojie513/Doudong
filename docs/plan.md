@@ -124,7 +124,7 @@ status.md 的记录不够准确（写了"未实现真实模型摘要"，但没�
 | 2.1 | **MCP 工具桥接**（P4，兼 P1）— **已完成** | 见 `status.md` M2 段；`-- mcp` 8 项 |
 | 2.2 | MCP 变化检测（P3）— **已完成** | `-- mcp-reload` 4 项；含反证 4/4 |
 | 2.3 | 指标导出（P1/P4）— **已完成** | `-- telemetry` 5 项；BCL Meter，不直接依赖 OTel 包 |
-| 2.4 | ACP Agent 端 stdio（P1/P4）— **最小闭环已完成** | `-- acp` 10 项 + 真实进程验证；load/resume/list/close 未实现（显式报错） |
+| 2.4 | ACP Agent 端 stdio（P1/P4）— **已完成（含审批）** | `-- acp` 13 项 + 真实进程验证；load/resume/list/close 未实现（显式报错） |
 
 **MCP 优先于 ACP 的理由**：MCP 扩展"能做什么"，ACP 扩展"怎么接入"。后者依赖前者有内容可暴露。
 

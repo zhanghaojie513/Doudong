@@ -25,8 +25,7 @@ public sealed class AcpAgentHost
 
     private readonly Stream _input;
     private readonly Stream _output;
-    private readonly Func<AcpSessionContext, IAgentRuntime> _runtimeFactory;
-    private readonly Func<AcpSessionContext, IToolDispatcher> _dispatcherFactory;
+    private readonly Func<AcpSessionContext, AcpSessionRuntime> _runtimeFactory;
     private readonly TextWriter _log;
     private readonly Dictionary<string, AcpSession> _sessions = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _writeLock = new(1, 1);
@@ -40,19 +39,16 @@ public sealed class AcpAgentHost
     public AcpAgentHost(
         Stream input,
         Stream output,
-        Func<AcpSessionContext, IAgentRuntime> runtimeFactory,
-        Func<AcpSessionContext, IToolDispatcher> dispatcherFactory,
+        Func<AcpSessionContext, AcpSessionRuntime> runtimeFactory,
         TextWriter? log = null)
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(runtimeFactory);
-        ArgumentNullException.ThrowIfNull(dispatcherFactory);
 
         _input = input;
         _output = output;
         _runtimeFactory = runtimeFactory;
-        _dispatcherFactory = dispatcherFactory;
         _log = log ?? Console.Error;
     }
 
@@ -147,9 +143,11 @@ public sealed class AcpAgentHost
                 break;
 
             case AcpMessageKind.Response:
-                // 首版没有向客户端发起的请求（除权限请求，它由 dispatcher 内部等待），
-                // 这里只记录：收到意外响应说明对端实现有问题。
-                _log.WriteLine("[acp] 收到未预期的响应，已忽略");
+                // 这是对 host 主动发出的请求（session/request_permission）的回复。
+                // 必须把结果交给等待方，否则权限请求永远等不到答复，
+                // 表现为"审批一直挂着"——而症状看起来像客户端不配合。
+                if (!CompletePendingRequest(message))
+                    _log.WriteLine("[acp] 收到未匹配的响应，已忽略");
                 break;
 
             default:
@@ -261,9 +259,10 @@ public sealed class AcpAgentHost
         var sessionId = "sess_" + Guid.NewGuid().ToString("N")[..12];
         var context = new AcpSessionContext(sessionId, cwd);
 
-        var dispatcher = _dispatcherFactory(context);
-        var runtime = _runtimeFactory(context);
-        var session = new AcpSession(sessionId, cwd, runtime, this, _log);
+        // 一次工厂调用产出一对 runtime + dispatcher：
+        // 若分别构造，审批器会挂在另一个实例上，工具执行根本不会经过它。
+        var pair = _runtimeFactory(context);
+        var session = new AcpSession(sessionId, cwd, pair.Runtime, this, _log);
 
         lock (_sessions) _sessions[sessionId] = session;
 
@@ -374,6 +373,35 @@ public sealed class AcpAgentHost
     }
 
     private readonly Dictionary<long, PendingRequest> _pending = [];
+
+    /// <summary>
+    /// 把一条响应交给对应的挂起请求。返回是否匹配到。
+    /// </summary>
+    /// <remarks>
+    /// 入站响应由同一读循环分派，所以这里只做"唤醒"而不阻塞——
+    /// 若在读循环里同步等待，请求方和响应处理会互相死锁。
+    /// </remarks>
+    private bool CompletePendingRequest(AcpMessage response)
+    {
+        if (response.Id is not JsonValue idValue) return false;
+
+        // 我们发出的请求 id 是 long；客户端应原样回传。
+        if (!idValue.TryGetValue<long>(out var id)) return false;
+
+        PendingRequest? pending;
+        lock (_pending)
+        {
+            if (!_pending.TryGetValue(id, out pending)) return false;
+            _pending.Remove(id);
+        }
+
+        pending.Completion.TrySetResult(response.Error is { } error
+            // 错误响应也交给调用方判断：它比"静默超时"可诊断得多。
+            ? new JsonObject { ["error"] = error.DeepClone() }
+            : response.Result?.DeepClone());
+
+        return true;
+    }
 
     private sealed class PendingRequest
     {

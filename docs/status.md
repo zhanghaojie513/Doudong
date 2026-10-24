@@ -282,9 +282,19 @@
     反证：改回阻塞等待，取消检查立刻失败。
   - 真实进程级验证：外部客户端驱动 `dougong --acp`，initialize → session/new →
     session/prompt 拿到 4 条 update、文本正确、`end_turn`。
+  - **审批已接入协议**（原缺口：`AcpApprover` 未接到 dispatcher，ACP 模式下需审批的调用
+    一律拒绝）：CLI 的 `--acp` 现在用 `AcpApprover` 构造 dispatcher，审批变成向客户端发
+    `session/request_permission` 并等待其选择。13 项验收（含三个审批用例：
+    批准后执行、拒绝后不执行、无回复降级为拒绝）。
+  - **修掉一个真缺陷**：host 收到权限请求的**响应**时直接忽略，从未交给等待方——
+    审批永远挂着，而症状看起来像"客户端不配合"。根因是读循环的 Response 分支
+    只写了日志。反证：改回忽略，两项审批检查立刻失败。
+  - **修掉一处装配缺陷**：原先 runtime 与 dispatcher 由两个工厂分别构造，
+    导致审批器挂在另一个实例上、工具执行根本不经过它。改为单一工厂产出一对。
+  - 真实进程级验证：外部客户端驱动 `dougong --acp`，1 次权限请求 → 客户端批准 →
+    工具执行 → 模型读到文件真实内容 → `end_turn`。
   - **未实现**：`session/load`/`resume`/`list`/`close`（显式返回 -32601 并给出替代做法）、
-    `fs/*`、`terminal`、`elicitation`、`plan`；`AcpApprover` 尚未接入 CLI 的 dispatcher
-    （当前 ACP 模式下需审批的调用一律拒绝，并在 stderr 说明）。
+    `fs/*`、`terminal`、`elicitation`、`plan`。
   - **指标导出已实现**（`src/Dougong.Ai/DougongTelemetry.cs`）：基于 BCL 的
     `System.Diagnostics.Metrics.Meter`，不直接引 `OpenTelemetry` 包——SDK 只发布到
     标准出口，谁来采集由宿主决定。5 项验收（`-- telemetry`）用 `MeterListener`
@@ -375,6 +385,11 @@
   9 项自检通过（含反证）；等待审批期间不持锁，避免慢审批阻塞工作区。
 - 2026-10-24：M1 提交屏障：`IAgentStore` 契约与 JSONL 实现，四个提交落点串起
   "先提交意图、再产生副作用"；6 项自检通过，并用移除屏障的反证确认测试有效。
+- 2026-10-24：M2.4 补完审批接线：AcpApprover 接入 CLI 的 dispatcher，审批走
+  session/request_permission。13 项验收（新增批准/拒绝/无回复三种情形）。
+  修掉两个真缺陷：host 收到响应后直接忽略（审批永远挂着）、
+  runtime 与 dispatcher 由两个工厂分别构造（审批器挂在不使用的实例上）。
+
 - 2026-10-24：M2.4 ACP Agent 端：按行分帧、版本协商、session/new / prompt / cancel、
   5 种 update 翻译、权限请求适配；10 项验收（含 stdout 纯净与事件顺序）。
   修掉一个真缺陷：session/prompt 在读循环里阻塞，导致 cancel 通知读不到。

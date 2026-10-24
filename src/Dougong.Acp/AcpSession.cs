@@ -15,6 +15,15 @@ namespace Dougong.Acp;
 public sealed record AcpSessionContext(string SessionId, string Workspace);
 
 /// <summary>
+/// 一个会话的运行时与工具入口。
+/// </summary>
+/// <remarks>
+/// 两者必须由**同一次**工厂调用产出：dispatcher 里挂着审批器与资源闸门，
+/// 若 runtime 与 dispatcher 分别构造，工具执行会绕过审批。
+/// </remarks>
+public sealed record AcpSessionRuntime(IAgentRuntime Runtime, IToolDispatcher Dispatcher);
+
+/// <summary>
 /// 一个 ACP 会话：把 <see cref="AgentEvent"/> 翻译为 <c>session/update</c>，
 /// 并把审批转成 <c>session/request_permission</c>。
 /// </summary>
@@ -168,8 +177,12 @@ internal sealed class AcpSession(
 /// </list>
 /// </para>
 /// </remarks>
+/// <remarks>
+/// 用 <see cref="Func{TResult}"/> 延迟取 host 而不是直接持有实例：
+/// host 在构造时就要调用会话工厂，而工厂里要创建审批器——直接持有会形成循环依赖。
+/// </remarks>
 public sealed class AcpApprover(
-    AcpAgentHost host,
+    Func<AcpAgentHost> hostAccessor,
     string sessionId,
     TimeSpan? timeout = null) : IToolApprover
 {
@@ -206,7 +219,7 @@ public sealed class AcpApprover(
 
         try
         {
-            var response = await host.RequestAsync(
+            var response = await hostAccessor().RequestAsync(
                 "session/request_permission", parameters, linked.Token).ConfigureAwait(false);
 
             return Interpret(response);

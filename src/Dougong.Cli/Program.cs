@@ -464,37 +464,62 @@ public static class Program
 
         using var client = ChatClientFactory.Create(config);
 
-        var host = new AcpAgentHost(
+        // host 与工厂互相依赖：工厂里要创建审批器，而审批器要能向 host 发请求。
+        // 用延迟绑定打破这个循环，而不是引入可变字段。
+        AcpAgentHost? host = null;
+
+        host = new AcpAgentHost(
             Console.OpenStandardInput(),
             Console.OpenStandardOutput(),
             context =>
             {
-                // 每会话一个独立 store，与会话 ID 绑定。
                 var sessionDir = Environment.GetEnvironmentVariable("DOUGONG_SESSION_DIR")
                     ?? Path.Combine(
                         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                         ".dougong", "sessions");
 
-                // 同步打开 store：ACP 首版不引入异步工厂复杂度，
-                // 失败时用内存态代替（并在 stderr 说明）。
                 var store = TryOpenSessionStore(sessionDir, context.SessionId);
-                return new LoopAgentRuntime(client, BuildDispatcher(context, store), store);
-            },
-            context => BuildDispatcher(context, null));
+
+                // 审批走协议：客户端弹窗选择，而不是控制台交互。
+                IToolApprover approver = host is null
+                    ? new DenyAllApprover("ACP host 尚未就绪，按拒绝处理。")
+                    : new AcpApprover(() => host!, context.SessionId);
+
+                var dispatcher = new ToolDispatcher(
+                    approver,
+                    new ToolResourceGate(),
+                    context.SessionId, "turn-1", context.Workspace,
+                    TimeSpan.FromMinutes(5),
+                    new WorkspacePathGuard(context.Workspace),
+                    store);
+
+                // 与 CLI 的 REPL 保持同一套最小工具集。
+                dispatcher.Register(new ReadFileTool(context.Workspace));
+                dispatcher.Register(new WriteFileTool(context.Workspace));
+
+                var runtime = new LoopAgentRuntime(client, dispatcher, store);
+                return new AcpSessionRuntime(runtime, dispatcher);
+            });
 
         await host.RunAsync();
         return 0;
     }
 
-    private static IToolDispatcher BuildDispatcher(AcpSessionContext context, IAgentStore? store) =>
-        new ToolDispatcher(
-            // 审批交给 ACP 客户端：权限请求是协议的一部分，不是控制台交互。
-            new StdinApprover(),
-            new ToolResourceGate(),
-            context.SessionId, "turn-1", context.Workspace,
-            TimeSpan.FromMinutes(5),
-            new WorkspacePathGuard(context.Workspace),
-            store);
+    /// <summary>
+    /// 兜底审批器：在 ACP host 尚未就绪等异常装配状态下**默认拒绝**。
+    /// </summary>
+    /// <remarks>
+    /// 存在的意义是"绝不默认放行"。静默批准会让一个装配错误变成安全问题。
+    /// </remarks>
+    private sealed class DenyAllApprover(string reason) : IToolApprover
+    {
+        public ValueTask<ToolApprovalDecision> RequestApprovalAsync(
+            ToolApprovalRequest request, CancellationToken cancellationToken = default)
+        {
+            Console.Error.WriteLine($"[acp] 拒绝工具 '{request.Tool.Name}'：{reason}");
+            return ValueTask.FromResult(ToolApprovalDecision.Deny(reason));
+        }
+    }
 
     private static IAgentStore? TryOpenSessionStore(string directory, string sessionId)
     {
