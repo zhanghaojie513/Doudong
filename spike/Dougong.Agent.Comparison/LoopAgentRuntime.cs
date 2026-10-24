@@ -10,13 +10,25 @@ namespace Dougong.Agent.Comparison;
 /// 候选 B：直接使用 <see cref="IChatClient"/>，由 Dougong 自己驱动循环。
 /// 刻意不套 <c>FunctionInvokingChatClient</c>，工具只能经由 <see cref="IToolDispatcher"/> 执行。
 /// </summary>
-public sealed class LoopAgentRuntime(IChatClient client, IToolDispatcher dispatcher) : IAgentRuntime
+public sealed class LoopAgentRuntime(
+    IChatClient client,
+    IToolDispatcher dispatcher,
+    IAgentStore? store = null) : IAgentRuntime
 {
     public async IAsyncEnumerable<AgentEvent> RunAsync(
         AgentRunRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         yield return new AgentEvent.RunStarted(request.SessionId, request.TurnId);
+
+        // 屏障 1：用户输入必须在任何模型调用之前提交。
+        // 提交失败即停止——不继续、不降级、不假装成功。
+        if (await CommitOrNullAsync(StoreRecordKind.UserInput, request.UserInput, cancellationToken)
+                is { } inputFailure)
+        {
+            yield return inputFailure;
+            yield break;
+        }
 
         var history = new List<ChatMessage>();
         foreach (var message in request.History)
@@ -178,6 +190,20 @@ public sealed class LoopAgentRuntime(IChatClient client, IToolDispatcher dispatc
                 yield break;
             }
 
+            // 屏障 2：完整模型响应（含工具调用请求）必须在任何派发之前提交。
+            // 这是"先提交调用意图、再产生副作用"的核心。
+            var responsePayload = JsonSerializer.Serialize(new
+            {
+                text = text.ToString(),
+                calls = calls.Select(c => new { id = c.Id, tool = c.ToolId }),
+            });
+            if (await CommitOrNullAsync(StoreRecordKind.ModelResponse, responsePayload, cancellationToken)
+                    is { } responseFailure)
+            {
+                yield return responseFailure;
+                yield break;
+            }
+
             var toolResults = new List<string>();
             foreach (var call in calls)
             {
@@ -187,8 +213,34 @@ public sealed class LoopAgentRuntime(IChatClient client, IToolDispatcher dispatc
 
                 yield return new AgentEvent.ToolCallRequested(call.Id, call.ToolId, args);
 
+                // 屏障 3：工具开始记录必须落盘，才允许执行（可能产生副作用）。
+                var startedPayload = JsonSerializer.Serialize(new { id = call.Id, tool = call.ToolId });
+                if (await CommitOrNullAsync(StoreRecordKind.ToolCallStarted, startedPayload, cancellationToken)
+                        is { } startedFailure)
+                {
+                    // 未提交则绝不执行；该调用保持"未开始"语义。
+                    yield return startedFailure;
+                    yield break;
+                }
+
                 var invocation = new ToolInvocation(call.Id, call.ToolId, args);
                 var result = await dispatcher.DispatchAsync(invocation, cancellationToken);
+
+                // 屏障 4：终态也要提交，否则恢复时无法判断副作用是否发生。
+                var completedPayload = JsonSerializer.Serialize(new
+                {
+                    id = call.Id,
+                    tool = call.ToolId,
+                    outcome = result.Outcome.ToString(),
+                });
+                if (await CommitOrNullAsync(StoreRecordKind.ToolCallCompleted, completedPayload, cancellationToken)
+                        is { } completedFailure)
+                {
+                    yield return new AgentEvent.ToolCallCompleted(result);
+                    yield return completedFailure;
+                    yield break;
+                }
+
                 yield return new AgentEvent.ToolCallCompleted(result);
                 toolResults.Add($"{call.ToolId}:{result.Outcome}");
             }
@@ -204,6 +256,32 @@ public sealed class LoopAgentRuntime(IChatClient client, IToolDispatcher dispatc
         }
 
         yield return new AgentEvent.RunFinished(AgentRunOutcome.ToolRoundLimitReached);
+    }
+
+    /// <summary>
+    /// 提交一条记录。成功返回 null；失败返回应向外发出的终止事件。
+    /// 未配置存储时视为"无持久化要求"，直接放行（仅用于对比与测试）。
+    /// </summary>
+    private async ValueTask<AgentEvent.RunFinished?> CommitOrNullAsync(
+        StoreRecordKind kind, string payload, CancellationToken cancellationToken)
+    {
+        if (store is null) return null;
+
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(payload));
+        try
+        {
+            await store.CommitAsync(
+                new StoreRecord(0, kind, document.RootElement.Clone()),
+                cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            // 提交失败即停止执行：不继续、不重试、不降级为无持久化模式。
+            return new AgentEvent.RunFinished(
+                AgentRunOutcome.Failed,
+                $"提交失败（{kind}）：{ex.Message}");
+        }
     }
 
     private static ChatRole ToRole(AgentRole role) => role switch

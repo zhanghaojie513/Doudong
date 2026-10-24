@@ -18,6 +18,9 @@ public static class Program
         if (args.FirstOrDefault() == "contract")
             return ContractChecks.Run();
 
+        if (args.FirstOrDefault() == "store")
+            return await StoreBarrierChecks.RunAsync();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 

@@ -51,6 +51,12 @@ public enum ToolCallOutcome
 
     /// <summary>执行过程中被取消。</summary>
     CancelledDuringExecution,
+
+    /// <summary>
+    /// 恢复时发现"有开始记录、无终态"。无法确认副作用是否发生，
+    /// 必须由宿主对账，不得自动重放。
+    /// </summary>
+    OutcomeUnknown,
 }
 
 /// <summary>
