@@ -142,6 +142,7 @@ The API is still experimental. Before using `Dougong.Kernel`, read the status bo
 | [Status board](docs/status.md) | What is implemented, test baseline, open acceptance items, recovery entry |
 | [M1 candidate comparison](docs/m1-candidate-comparison.md) | Like-for-like comparison of MAF wrapping vs the in-house loop, versions, decision rationale |
 | [M0 dev journey](docs/journey/m0-dev-journey.md) | Problems and misjudgments that actually happened during M0, for retrospective writing |
+| [Development plan](docs/plan.md) | Milestone order, gap register and acceptance criteria |
 | [M1 dev journey](docs/journey/m1-dev-journey.md) | Defects, test flaws and misjudgments during M1, including protocol issues only real providers exposed |
 | [Philosophy](docs/vision/philosophy.md) | The dougong metaphor, design principles, explicit non-goals |
 | [Frontier survey](docs/vision/frontier-roadmap.md) | Public progress in agent harnesses, protocols, isolation and memory evaluation |

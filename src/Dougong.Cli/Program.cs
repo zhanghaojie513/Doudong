@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Dougong.Agent;
 using Dougong.Ai;
+using Microsoft.Extensions.AI;
 
 namespace Dougong.Cli;
 
@@ -17,6 +18,7 @@ namespace Dougong.Cli;
 /// <item><c>DOUGONG_WORKSPACE</c> 可选，默认当前目录</item>
 /// <item><c>DOUGONG_SESSION_DIR</c> 可选，默认 ~/.dougong/sessions</item>
 /// <item><c>DOUGONG_SHELL</c> 可选：设为 <c>1</c> 时启用 <c>shell</c> 工具（默认关闭）</item>
+/// <item><c>DOUGONG_CONTEXT_WINDOW</c> 可选：模型上下文窗口大小；设置后启用历史压缩（默认关闭）</item>
 /// </list>
 /// 会话参数：
 /// <list type="bullet">
@@ -137,10 +139,19 @@ public static class Program
 
         var shellEnabled = Environment.GetEnvironmentVariable("DOUGONG_SHELL") is "1" or "true";
 
+        // 上下文预算：按 DOUGONG_CONTEXT_WINDOW 配置；未配置时保持旧行为（不压缩）。
+        var contextWindow = int.TryParse(
+            Environment.GetEnvironmentVariable("DOUGONG_CONTEXT_WINDOW"), out var window) && window > 0
+            ? window
+            : 0;
+
         Console.WriteLine($"dougong 0.1.0-alpha.1  模型={config.Model}  协议={config.Protocol}");
         Console.WriteLine($"工作区={workspace}");
         Console.WriteLine($"会话={sessionPath}");
         Console.WriteLine($"shell 工具={(shellEnabled ? "已启用" : "未启用（DOUGONG_SHELL=1 开启）")}");
+        Console.WriteLine(contextWindow > 0
+            ? $"上下文压缩=已启用（窗口 {contextWindow} tokens）"
+            : "上下文压缩=未启用（DOUGONG_CONTEXT_WINDOW 开启）");
 
         await using var store = await JsonlAgentStore.OpenAsync(sessionPath, sessionId)
             .ConfigureAwait(false);
@@ -164,7 +175,17 @@ public static class Program
 
         if (shellEnabled) dispatcher.Register(new ShellTool(workspace));
 
-        var runtime = new LoopAgentRuntime(client, dispatcher, store);
+        var runtime = contextWindow > 0
+            ? new LoopAgentRuntime(
+                client, dispatcher, store,
+                new ContextLimits
+                {
+                    ContextWindowTokens = contextWindow,
+                    MaxOutputTokens = 4_096,
+                },
+                new SlidingWindowCompactor(preservedHead: 2, preservedTail: 6),
+                (transcript, ct) => SummarizeAsync(client, transcript, ct))
+            : new LoopAgentRuntime(client, dispatcher, store);
         var messages = new List<AgentMessage>(history);
         var turn = 0;
 
@@ -204,6 +225,14 @@ public static class Program
                         case AgentEvent.ToolCallCompleted done:
                             Console.WriteLine($"  ← {done.Result.Outcome}" +
                                 (done.Result.Diagnostic is { } d ? $"（{d}）" : string.Empty));
+                            break;
+
+                        case AgentEvent.ContextCompacted compacted:
+                            Console.WriteLine();
+                            Console.WriteLine(compacted.Applied
+                                ? $"  ⇄ 已压缩 {compacted.RemovedMessages} 条历史"
+                                  + $"（估算 {compacted.EstimatedTokensBefore} → {compacted.EstimatedTokensAfter} tokens）"
+                                : $"  ⇄ 未压缩：{compacted.Diagnostic}");
                             break;
 
                         case AgentEvent.RunFinished finished:
@@ -362,6 +391,31 @@ public static class Program
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// 用同一个连接器生成摘要。摘要失败不抛给调用方——
+    /// 压缩是优化，不能成为新的失败点；失败会由循环降级为"保留原历史"。
+    /// </summary>
+    private static async ValueTask<string> SummarizeAsync(
+        IChatClient client, string transcript, CancellationToken cancellationToken)
+    {
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System,
+                "把下面的对话历史压缩成要点，保留任务目标、已做的决定、失败过的尝试与未完成事项。"
+                + "不要编造未出现的内容。只输出摘要正文。"),
+            new(ChatRole.User, transcript),
+        };
+
+        var builder = new StringBuilder();
+        await foreach (var update in client.GetStreamingResponseAsync(
+            messages, cancellationToken: cancellationToken))
+        {
+            if (update.Text is { Length: > 0 } chunk) builder.Append(chunk);
+        }
+
+        return builder.ToString();
     }
 
     private static string Truncate(string text) =>

@@ -76,6 +76,21 @@ public abstract record AgentEvent
     /// <summary>工具调用的最终状态。每个 ToolCallRequested 必须恰好对应一个该事件。</summary>
     public sealed record ToolCallCompleted(ToolDispatchResult Result) : AgentEvent;
 
+    /// <summary>
+    /// 上下文已压缩。宿主应如实展示这件事：压缩是有损的，
+    /// 用户需要知道"模型看到的不再是完整历史"。
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Summary"/> 为 null 表示压缩已决定但未完成（失败或预算不足），
+    /// 此时历史未被替换，必须继续按原历史运行。
+    /// </remarks>
+    public sealed record ContextCompacted(
+        int RemovedMessages,
+        int EstimatedTokensBefore,
+        int EstimatedTokensAfter,
+        bool Applied,
+        string? Diagnostic = null) : AgentEvent;
+
     /// <summary>运行结束，携带终止原因。</summary>
     public sealed record RunFinished(AgentRunOutcome Outcome, string? Diagnostic = null) : AgentEvent;
 }

@@ -37,6 +37,36 @@ public sealed record CompactionInput(
     int EstimateErrorTokens = 512);
 
 /// <summary>
+/// 上下文预算。宿主按所用模型的上下文窗口构造，循环据此判断是否需要压缩。
+/// </summary>
+/// <remarks>
+/// 与 <see cref="CompactionInput"/> 分开的原因：预算是"这个模型能装多少"，
+/// 而 <see cref="CompactionInput"/> 是"这一次请求要压什么"。把两者混在一起，
+/// 会让每次压缩都重新声明模型能力，容易漂移。
+/// <para>
+/// <see cref="OverheadTokens"/> 预留给工具声明与系统指令——它们不进
+/// <c>CommittedHistory</c>，但确实占用上下文。不预留会系统性低估。
+/// </para>
+/// </remarks>
+public sealed record ContextLimits
+{
+    public required int ContextWindowTokens { get; init; }
+
+    public required int MaxOutputTokens { get; init; }
+
+    /// <summary>估算误差与工具声明/系统指令的预留量。</summary>
+    public int OverheadTokens { get; init; } = 512;
+
+    /// <summary>构造压缩输入；历史在调用时给出。</summary>
+    public CompactionInput ToInput(IReadOnlyList<AgentMessage> history) =>
+        new(history, ContextWindowTokens, MaxOutputTokens, OverheadTokens);
+
+    /// <summary>有效输入预算，必须为正；否则配置本身不可行。</summary>
+    public int EffectiveInputTokens =>
+        TokenBudget.EffectiveInput(ContextWindowTokens, MaxOutputTokens, OverheadTokens);
+}
+
+/// <summary>
 /// 压缩计划。第一阶段（Select）的产物：要压缩哪个区间、保留哪些内容。
 /// </summary>
 public sealed record CompactionPlan(

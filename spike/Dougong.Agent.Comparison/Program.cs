@@ -45,6 +45,9 @@ public static class Program
         if (args.FirstOrDefault() == "usage")
             return await UsageChecks.RunAsync();
 
+        if (args.FirstOrDefault() == "wiring")
+            return await CompactionWiringChecks.RunAsync();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 

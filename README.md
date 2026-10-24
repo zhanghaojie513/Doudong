@@ -150,6 +150,7 @@ dotnet pack Dougong.slnx -c Release --output ./artifacts/packages
 | [实施状态](docs/status.md) | 已实现内容、测试基线、未完成验收和恢复入口 |
 | [M1 候选对比](docs/m1-candidate-comparison.md) | MAF 包装与自研循环的同用例对比、版本与选择理由 |
 | [M0 开发历程](docs/journey/m0-dev-journey.md) | M0 期间真实发生的问题与判断错误，供开发记录梳理 |
+| [开发计划](docs/plan.md) | 里程碑顺序、缺口台账与判定标准；防跑偏用 |
 | [M1 开发历程](docs/journey/m1-dev-journey.md) | M1 期间的实现缺陷、测试缺陷与判断错误；含真实 provider 才暴露的协议问题 |
 | [设计理念](docs/vision/philosophy.md) | 斗拱隐喻、设计原则和明确不做的事情 |
 | [前沿调查](docs/vision/frontier-roadmap.md) | Agent Harness、协议、隔离和记忆评测的公开进展 |

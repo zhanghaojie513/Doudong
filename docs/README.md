@@ -18,6 +18,7 @@ journey/ = 开发记录：各里程碑真实发生的问题与判断。复盘素
 |---|---|---|
 | [architecture.md](architecture.md) | 系统长什么样、怎么运转：分层、内核契约、状态机、动态加载、宿主边界 | 实现者；多处代码注释引用其章节号 |
 | [design.md](design.md) | 为什么这样设计：生态位、里程碑、MAF 复用决策、桌面端双轨计划 | 决策与评审 |
+| [plan.md](plan.md) | 下一步做什么：里程碑顺序、缺口台账、判定标准 | 决定优先级时读 |
 | [status.md](status.md) | 现在到哪了：已实现、测试基线、未完成验收、恢复入口 | **新会话第一入口** |
 | [m1-candidate-comparison.md](m1-candidate-comparison.md) | M1 候选对比：MAF 包装 vs 自研循环的同用例对比与选择理由 | M1 实现者；Agent 代码注释引用。M1 关闭后移入 `journey/` |
 

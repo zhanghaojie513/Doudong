@@ -16,11 +16,19 @@ namespace Dougong.Agent;
 /// 提交屏障的四个落点：用户输入、完整模型响应、工具调用开始、工具调用终态。
 /// 任一处提交失败即停止运行，不重试也不降级。
 /// </para>
+/// <para>
+/// 上下文压缩在每轮调用模型前检查一次，且是可选的：不传 <see cref="ContextLimits"/>
+/// 即保持原有行为（把完整历史送进模型）。压缩失败或预算仍不足时**保留原历史并继续**
+/// ——中断一个本来能跑的任务，比让它带着过长的上下文被 provider 拒绝更糟，也更难诊断。
+/// </para>
 /// </remarks>
 public sealed class LoopAgentRuntime(
     IChatClient client,
     IToolDispatcher dispatcher,
-    IAgentStore? store = null) : IAgentRuntime
+    IAgentStore? store = null,
+    ContextLimits? limits = null,
+    IContextCompactor? compactor = null,
+    Func<string, CancellationToken, ValueTask<string>>? summarize = null) : IAgentRuntime
 {
     public async IAsyncEnumerable<AgentEvent> RunAsync(
         AgentRunRequest request,
@@ -38,13 +46,35 @@ public sealed class LoopAgentRuntime(
             yield break;
         }
 
-        var history = new List<ChatMessage>();
-        foreach (var message in request.History)
-            history.Add(ToChatMessage(message));
-        history.Add(new ChatMessage(ChatRole.User, request.UserInput));
+        // 压缩只处理进入循环前的基线历史（request.History）。
+        // 循环内部追加的 assistant/tool 交互不参与压缩：它们是最新的工作上下文，
+        // 且必须成对保留——把其中一半压掉就会得到悬空的 tool_calls。
+        IReadOnlyList<AgentMessage> baseline = new List<AgentMessage>(request.History);
+        var history = BuildHistory(baseline, request.UserInput);
+        // 循环内追加的交互从这一下标开始；压缩时只替换它之前的前缀。
+        var tailStart = history.Count;
 
         for (var round = 0; round < request.MaxToolRounds; round++)
         {
+            // 每轮调用模型前检查预算。压缩失败不中断运行——见类型注释。
+            if (limits is not null && compactor is not null)
+            {
+                var compaction = await TryCompactAsync(baseline, cancellationToken)
+                    .ConfigureAwait(false);
+                if (compaction.Event is not null) yield return compaction.Event;
+
+                if (compaction.Replaced is { } replaced)
+                {
+                    baseline = replaced;
+                    // 只替换前缀：[基线转换后...] + [本轮用户输入 ... 尾部追加]
+                    // 尾部（循环内产生的 assistant/tool 交互）原样保留，
+                    // 它们是当前工作上下文，且必须成对存在。
+                    var rebuilt = BuildHistory(baseline, request.UserInput);
+                    rebuilt.AddRange(history.Skip(tailStart));
+                    history = rebuilt;
+                    tailStart = baseline.Count + 1;
+                }
+            }
             // 聚合本轮流式输出：文本直接投影，函数调用按 ID 收集完整参数。
             var text = new StringBuilder();
             var calls = new List<PendingCall>();
@@ -396,6 +426,110 @@ public sealed class LoopAgentRuntime(
         AgentRole.Tool => ChatRole.Tool,
         _ => ChatRole.User,
     };
+
+    /// <summary>用基线历史构造初始请求消息，末尾追加本轮用户输入。</summary>
+    private static List<ChatMessage> BuildHistory(
+        IReadOnlyList<AgentMessage> baseline, string userInput)
+    {
+        var history = new List<ChatMessage>(baseline.Count + 1);
+        foreach (var message in baseline) history.Add(ToChatMessage(message));
+        history.Add(new ChatMessage(ChatRole.User, userInput));
+        return history;
+    }
+
+    /// <summary>
+    /// 检查预算并按需压缩。返回替换后的基线与应发出的事件。
+    /// </summary>
+    /// <remarks>
+    /// 三条件都不满足才替换：计划存在、任务跑到 <see cref="CompactionPhase.Completed"/>、
+    /// 且 <see cref="CompactionApply.TryApply"/> 成功。任一不满足都保留原历史——
+    /// 压缩是优化，不能成为新的失败点。
+    /// <para>
+    /// 没有 <c>summarize</c> 注入时不压缩：当前的 <see cref="SlidingWindowCompactor"/>
+    /// 只负责选区，真正的摘要需要一次模型调用。宁可如实不压，也不假装压过。
+    /// </para>
+    /// </remarks>
+    private async ValueTask<(IReadOnlyList<AgentMessage>? Replaced, AgentEvent? Event)>
+        TryCompactAsync(IReadOnlyList<AgentMessage> baseline, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var plan = compactor!.Plan(limits!.ToInput(baseline));
+            if (plan is null) return (null, null);
+
+            if (summarize is null)
+            {
+                // 只能选区、无法摘要：如实报告"未压缩"，不产出半成品历史。
+                return (null, new AgentEvent.ContextCompacted(
+                    plan.LastIndex - plan.FirstIndex + 1,
+                    plan.EstimatedTokensBefore,
+                    plan.EstimatedTokensBefore,
+                    Applied: false,
+                    Diagnostic: "未配置摘要器，跳过压缩；历史保持不变。"));
+            }
+
+            var task = new SummarizingCompactionTask(
+                plan, baseline, summarize, RenderForSummary);
+
+            // 逐阶段推进到终态；中间态可序列化，崩溃后能续跑（由宿主决定是否持久化）。
+            var steps = 0;
+            while (!task.Checkpoint.IsTerminal && steps++ < 8)
+                await task.AdvanceAsync(cancellationToken).ConfigureAwait(false);
+
+            var checkpoint = task.Checkpoint;
+            if (checkpoint.Phase != CompactionPhase.Completed)
+            {
+                return (null, new AgentEvent.ContextCompacted(
+                    plan.LastIndex - plan.FirstIndex + 1,
+                    plan.EstimatedTokensBefore,
+                    plan.EstimatedTokensBefore,
+                    Applied: false,
+                    Diagnostic: $"压缩未完成（{checkpoint.Phase}）：{checkpoint.FailureReason}"));
+            }
+
+            var applied = CompactionApply.TryApply(baseline, checkpoint);
+            if (applied is null)
+            {
+                return (null, new AgentEvent.ContextCompacted(
+                    plan.LastIndex - plan.FirstIndex + 1,
+                    plan.EstimatedTokensBefore,
+                    plan.EstimatedTokensBefore,
+                    Applied: false,
+                    Diagnostic: "摘要已生成但无法应用（历史已变化）；保留原历史。"));
+            }
+
+            return (applied, new AgentEvent.ContextCompacted(
+                plan.LastIndex - plan.FirstIndex + 1,
+                plan.EstimatedTokensBefore,
+                TokenBudget.Estimate(applied),
+                Applied: true));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // 压缩自身出错不能中断运行：历史不变，任务继续。
+            return (null, new AgentEvent.ContextCompacted(
+                0, TokenBudget.Estimate(baseline), TokenBudget.Estimate(baseline),
+                Applied: false, Diagnostic: $"压缩失败：{ex.GetType().Name}: {ex.Message}"));
+        }
+    }
+
+    /// <summary>把历史渲染成供摘要器阅读的文本；保留工具标识以便摘要说明调用关系。</summary>
+    private static string RenderForSummary(IReadOnlyList<AgentMessage> messages)
+    {
+        var builder = new StringBuilder();
+        foreach (var message in messages)
+        {
+            builder.Append('[').Append(message.Role).Append(']');
+            if (message.ToolId is { Length: > 0 } toolId) builder.Append('(').Append(toolId).Append(')');
+            builder.Append(' ').AppendLine(message.Content);
+        }
+
+        return builder.ToString();
+    }
 
     /// <summary>
     /// 把已提交历史还原成协议消息。
