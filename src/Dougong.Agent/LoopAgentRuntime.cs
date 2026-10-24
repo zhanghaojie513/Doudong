@@ -1,15 +1,22 @@
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
-using Dougong.Agent;
 using Microsoft.Extensions.AI;
 
-namespace Dougong.Agent.Comparison;
+namespace Dougong.Agent;
 
 /// <summary>
-/// 候选 B：直接使用 <see cref="IChatClient"/>，由 Dougong 自己驱动循环。
-/// 刻意不套 <c>FunctionInvokingChatClient</c>，工具只能经由 <see cref="IToolDispatcher"/> 执行。
+/// Dougong 的 agent 循环：直接驱动 <see cref="IChatClient"/>，自己控制轮次与工具派发。
 /// </summary>
+/// <remarks>
+/// 这是 M1 候选对比之后选定的实现（见 docs/m1-candidate-comparison.md）。
+/// 刻意不套 <c>FunctionInvokingChatClient</c>：任何会自行执行工具的中间件
+/// 都会绕过 <see cref="IToolDispatcher"/>，破坏唯一执行入口。
+/// <para>
+/// 提交屏障的四个落点：用户输入、完整模型响应、工具调用开始、工具调用终态。
+/// 任一处提交失败即停止运行，不重试也不降级。
+/// </para>
+/// </remarks>
 public sealed class LoopAgentRuntime(
     IChatClient client,
     IToolDispatcher dispatcher,
@@ -40,6 +47,9 @@ public sealed class LoopAgentRuntime(
             // 聚合本轮流式输出：文本直接投影，函数调用按 ID 收集完整参数。
             var text = new StringBuilder();
             var calls = new List<PendingCall>();
+            // 某些 provider（如 DeepSeek 思考模式）要求带工具调用的 assistant 消息
+            // 回传 reasoning_content，否则请求被拒。这里原样保留并透传。
+            var reasoning = new StringBuilder();
             var fragmentCount = new Dictionary<string, int>(StringComparer.Ordinal);
 
             // 工具声明是运行时对连接器的正式输出，不是循环拼的提示文本。
@@ -66,6 +76,7 @@ public sealed class LoopAgentRuntime(
                     streamFailure = $"模型流中断：{ex.Message}" + (ex.InnerException is { } i ? $" | inner: {i.GetType().Name}: {i.Message}" : "");
                 }
 
+                // 取消与失败必须先处理：此时 Current 不可访问。
                 if (cancelled)
                 {
                     yield return new AgentEvent.RunFinished(AgentRunOutcome.Cancelled, "模型调用被取消。");
@@ -79,6 +90,11 @@ public sealed class LoopAgentRuntime(
                 }
 
                 if (!moved) break;
+
+                if (enumerator.Current.AdditionalProperties is { } updateProps
+                    && updateProps.TryGetValue("reasoning_content", out var reasoningValue)
+                    && reasoningValue?.ToString() is { Length: > 0 } reasoningText)
+                    reasoning.Append(reasoningText);
 
                 foreach (var content in enumerator.Current.Contents)
                 {
@@ -146,7 +162,12 @@ public sealed class LoopAgentRuntime(
             }
 
             if (text.Length > 0)
-                history.Add(new ChatMessage(ChatRole.Assistant, text.ToString()));
+                history.Add(new ChatMessage(ChatRole.Assistant, text.ToString())
+                {
+                    AdditionalProperties = reasoning.Length > 0
+                        ? new AdditionalPropertiesDictionary { ["reasoning_content"] = reasoning.ToString() }
+                        : null,
+                });
 
             if (calls.Count == 0)
             {
@@ -204,7 +225,7 @@ public sealed class LoopAgentRuntime(
                 yield break;
             }
 
-            var toolResults = new List<string>();
+            var toolResults = new List<(string Id, string ToolId, ToolDispatchResult Result)>();
             foreach (var call in calls)
             {
                 // 用累积片段的原文重新解析，而不是直接序列化字典：
@@ -242,7 +263,7 @@ public sealed class LoopAgentRuntime(
                 }
 
                 yield return new AgentEvent.ToolCallCompleted(result);
-                toolResults.Add($"{call.ToolId}:{result.Outcome}");
+                toolResults.Add((call.Id, call.ToolId, result));
             }
 
             if (cancellationToken.IsCancellationRequested)
@@ -251,11 +272,58 @@ public sealed class LoopAgentRuntime(
                 yield break;
             }
 
-            // 工具终态回填后进入下一轮模型调用。
-            history.Add(new ChatMessage(ChatRole.Tool, string.Join(";", toolResults)));
+            // 回填必须符合协议：assistant 消息携带 tool_calls，每条 tool 结果带 tool_call_id。
+            // 早期实现把结果压成一条普通 Tool 文本，缺 tool_call_id 会被 provider 拒绝（422）。
+            AppendToolExchange(history, calls, toolResults, reasoning.ToString());
         }
 
         yield return new AgentEvent.RunFinished(AgentRunOutcome.ToolRoundLimitReached);
+    }
+
+    /// <summary>
+    /// 按协议回填工具交互：先补一条携带 tool_calls 的 assistant 消息，
+    /// 再为每个调用追加带 tool_call_id 的 tool 消息。
+    /// </summary>
+    private static void AppendToolExchange(
+        List<ChatMessage> history,
+        IReadOnlyList<PendingCall> calls,
+        IReadOnlyList<(string Id, string ToolId, ToolDispatchResult Result)> results,
+        string reasoning)
+    {
+        var toolCalls = new List<AIContent>();
+        foreach (var call in calls)
+        {
+            toolCalls.Add(new FunctionCallContent(
+                call.Id,
+                call.ToolId,
+                ParseArguments(call) is var element && element.ValueKind is JsonValueKind.Object
+                    ? element.EnumerateObject().ToDictionary(p => p.Name, p => (object?)p.Value.Clone())
+                    : null));
+        }
+
+        history.Add(new ChatMessage(ChatRole.Assistant, toolCalls)
+        {
+            AdditionalProperties = reasoning.Length > 0
+                ? new AdditionalPropertiesDictionary { ["reasoning_content"] = reasoning }
+                : null,
+        });
+
+        foreach (var (id, toolId, result) in results)
+        {
+            var content = result.Result?.Content.ValueKind is JsonValueKind.Undefined or null
+                ? JsonSerializer.Serialize(new { outcome = result.Outcome.ToString(), diagnostic = result.Diagnostic })
+                : result.Result.Content.GetRawText();
+
+            history.Add(new ChatMessage(ChatRole.Tool, content)
+            {
+                Contents = [new FunctionResultContent(id, content)],
+                AdditionalProperties = new AdditionalPropertiesDictionary
+                {
+                    ["tool_call_id"] = id,
+                    ["name"] = toolId,
+                },
+            });
+        }
     }
 
     /// <summary>

@@ -128,7 +128,13 @@
   - **明确保留的近似**：token 按 2 字符/token 估算，不是 provider 真实计数；
     阈值必须保守使用，不宣称精确。
 - [ ] 真实编码任务与 CLI 构建/打包通过；模型/工具代码实际接入后再记录已验证能力。
-  - 真实编码任务已通过（六个 provider，含写文件与内容校验）；CLI 仍未接入。
+  - 真实编码任务已通过（六个 provider，含写文件与内容校验）。
+  - CLI 已接入（`src/Dougong.Cli`）：REPL + 控制台审批 + 工作区内 read_file/write_file
+    + JSONL 会话 + 完整提交屏障。已用 DeepSeek 端到端验证：模型请求调用 → 控制台审批 →
+    执行写入 → 回传结果 → 模型给出结论。
+  - 修复的两个真实协议缺陷：工具结果回填缺 `tool_call_id`（provider 422）、
+    DeepSeek 思考模式要求回传 `reasoning_content`（provider 400）。
+  - **未实现**：多会话、会话 resume/branch、CLI 参数化 provider 配置、shell 工具。
 
 ## 桌面恢复与重连（设计已修订，未实现）
 
@@ -178,6 +184,8 @@
 - 2026-10-23：处理外部引用治理：`PluginHandle`/`PluginSummary` 不再携带 `PluginManifest`，只保留 Id/Version/State；完整清单改由 `GetPluginManifestAsync` 显式取得。实证保留快照不再阻止动态插件 ALC 回收，显式持有清单仍会（属调用方主动选择）。Release 构建与 143 项内核测试通过。
 - 2026-10-23：最终复审发现共享契约登记是进程级静态状态且不可撤销，漏配时插件会先登记、激活失败、留下不可卸载的隔离代次。改为 `DougongKernel.RegisterSharedContract`（按内核实例隔离、返回句柄可撤销）；装配解析失败时 `LoadAsync` 回滚条目并抛出提示登记契约的可操作诊断。Release 构建与 146 项内核测试通过。
 - 2026-10-24：M0 关闭复审：`PluginManifest` 改为只读快照（外部改动不再能绕过依赖判定），移除死字段；13 项独立探测全部通过，M0 验收项据此勾选。
+- 2026-10-24：M1 CLI：REPL 宿主接入循环/屏障/审批/JSONL；端到端真实调用通过，
+  期间修掉工具结果回填缺 tool_call_id 与 DeepSeek reasoning_content 回传两个协议缺陷。
 - 2026-10-24：M1 上下文压缩：三阶段检查点 + 滑动窗口，保护工具配对，
   摘要失败不覆盖原历史；9 项自检通过（含反证）。
 - 2026-10-24：M1 文件版本复核：工具声明文件依赖，审批时捕获、执行前比对；
