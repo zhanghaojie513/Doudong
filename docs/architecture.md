@@ -269,6 +269,8 @@ public sealed record AgentToolResult(JsonElement Content, JsonElement? Details =
 
 以上是待编译验证的契约草案；`ToolExecutionPlan` 首版只有串行与工作区独占两种，资源级并发键在需要时再扩展。`Descriptor` 由运行时注册时冻结，模型只见 Name/Description/InputSchema；宿主同时记录插件激活代次、来源和版本。`InputSchema` 必须有宿主侧校验器，不以模型“应该遵守 schema”代替验证。运行时复制 JsonElement 为独立拥有的数据，限制参数/结果大小；不保留插件自定义对象或已释放 JsonDocument 的引用。Content 进入模型历史，Details 仅供 UI，仍遵守日志/隐私与大小限制。
 
+**参数校验（M2 已完整实现）**：`ToolSchemaValidator` 覆盖工具参数实际会用到的 schema 构造——类型、嵌套 required、enum/const、数值边界、字符串长度与 pattern、数组 items/uniqueItems、`additionalProperties:false`。**遇到不支持的构造必须报错**（`$ref`、`allOf`、条件 schema 等），不能静默跳过：静默跳过等于向使用者宣称"已校验"而实际没有。MCP 接入后这条更硬——schema 来自不可信远端，它声明的类型约束不能被忽略。
+
 `IsKnown=false` 表示无法可靠描述，不能把未知映射成 `None`；`None` 仅表示受信任实现声明无敏感访问。权限可组合，审批器必须覆盖所有要求；路径解析到当前工作区并处理大小写、链接/重解析点、越界路径及文件版本。校验仍存在文件系统竞态，必要时在实际打开文件时复核，不宣称绝对隔离。shell 按 Execute 处理，不能靠命令文本静态推断全部副作用。
 
 自描述统一了声明入口，减少中央权限表遗漏风险，但不证明声明真实。宿主保留逐工具覆盖/拒绝配置；未知权限默认拒绝或经明示风险的人工确认，不能自动放行。可信进程内插件可直接调用 OS API，因此审批约束的是统一执行入口，不是安全沙箱。
@@ -285,7 +287,8 @@ public sealed record AgentToolResult(JsonElement Content, JsonElement? Details =
 
 ### 4.5 上下文压缩
 
-- 预算包括系统指令、历史、工具 schema、输出余量与估算误差；`effective` 是扣除输出/安全余量后的输入预算，必须为正。旧公式 `max(effective − 13_000, floor(effective × 0.6))` 仅是候选触发阈值，不是通用保证；按模型上下文和真实 token 计数验证后配置。
+- 预算包括系统指令、历史、工具 schema、输出余量与估算误差；`effective` 是扣除输出/安全余量后的输入预算，必须为正。
+- **估算模型（实测校准，2026-10-24）**：对 DeepSeek `deepseek-flash` 的实测线性拟合为 `tokens = 30 + chars/8`。纯 ASCII 长文本约 8 字符/token，中文约 1.2 字符/token，短文本被固定开销主导（31 字符用 37 token）。因此估算必须**按字符类别分段**并计入消息级开销，单一比例在两种方向上都会错。代码取 ASCII 4、CJK 1 作为**有意保守**的值：高估的代价是多压一点历史，低估的代价是会话撞上 provider 上限才失败。不同 provider 分词器不同，不宣称精确。旧公式 `max(effective − 13_000, floor(effective × 0.6))` 仅是候选触发阈值，不是通用保证；按模型上下文和真实 token 计数验证后配置。
 - 压缩只处理已提交的一致历史切面，保留进行中工具调用及其结果配对；摘要版本和来源区间提交成功后再替换上下文，原日志保留。失败不得覆盖原历史。
 - **接入点（M1 已实现）**：每轮调用模型前检查一次预算。压缩只作用于**进入循环前的基线历史**；循环内部追加的 assistant/tool 交互不参与——它们是最新的工作上下文，且必须成对保留，压掉一半会得到悬空的 `tool_calls`。
 - **降级优先于中断**：摘要失败、未配置摘要器、预算配置不可行、摘要无法应用，四种情形都保留原历史并继续运行，各自发出带诊断的 `ContextCompacted` 事件（`Applied = false`）。理由是中断一个本来能跑的任务，比让它带着过长上下文被 provider 拒绝更糟，也更难诊断。若宿主希望"预算不足即暂停"，由宿主依据该事件决定，而不是让运行时静默截断。

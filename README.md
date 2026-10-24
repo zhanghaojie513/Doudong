@@ -126,10 +126,9 @@ dotnet test Dougong.slnx -c Release --no-build
 运行器，因此 `dotnet test` 走新体验，不需要 VSTest adapter。
 
 ```bash
-# 确定性自检套件（不联网）
-for m in mcp mcp-reload reachability wiring approval-log wire session usage shell \n         failure store approval fileversion compaction contract; do
-  dotnet run --project spike/Dougong.Agent.Comparison -c Release --no-build -- $m
-done
+# 全部确定性自检套件（18 套，不联网）
+# 脚本会先单独重建 spike——它不在 solution 里，全量构建不会重建它
+bash scripts/all-checks.sh
 ```
 
 ### 打包

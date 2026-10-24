@@ -60,6 +60,15 @@ public static class Program
         if (args.FirstOrDefault() == "mcp-reload")
             return await McpReloadChecks.RunAsync();
 
+        if (args.FirstOrDefault() == "tool-replacement")
+            return await ToolReplacementChecks.RunAsync();
+
+        if (args.FirstOrDefault() == "schema")
+            return await SchemaValidationChecks.RunAsync();
+
+        if (args.FirstOrDefault() == "token")
+            return TokenEstimateChecks.Run();
+
         // 供端到端测试使用的最小 stdio MCP server。
         if (args.FirstOrDefault() == "mcp-server")
             return await McpTestServer.RunAsync();

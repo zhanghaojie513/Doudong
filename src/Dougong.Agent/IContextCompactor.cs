@@ -153,16 +153,91 @@ public sealed record CompactionCheckpoint(
 /// </remarks>
 public static class TokenBudget
 {
-    /// <summary>粗略估算：英文约 4 字符/token，CJK 约 1 字符/token，取保守值 2。</summary>
-    public const int CharsPerToken = 2;
+    /// <summary>
+    /// 纯 ASCII 文本的字符/token 比，来自实测（DeepSeek deepseek-flash，2026-10-24）。
+    /// </summary>
+    /// <remarks>
+    /// 实测线性拟合：<c>tokens = 30 + chars / 8</c>（50～12 800 字符区间）。
+    /// 长文本约 8 字符/token，但短文本被固定开销主导（31 字符用 37 token）。
+    /// <para>
+    /// 这里取 4 而不是 8：这是**压缩触发**用的估算，宁可高估 token 数（更早压缩）
+    /// 也不要低估（撞上 provider 上限才发现）。高估的代价是多压一点历史，
+    /// 低估的代价是整个会话失败。
+    /// </para>
+    /// </remarks>
+    public const int AsciiCharsPerToken = 4;
 
-    /// <summary>估算一段文本的 token 数。</summary>
-    public static int Estimate(string? text) =>
-        string.IsNullOrEmpty(text) ? 0 : (text.Length + CharsPerToken - 1) / CharsPerToken;
+    /// <summary>
+    /// CJK 字符/token 比，来自实测。中文实测约 1.2 字符/token。
+    /// </summary>
+    /// <remarks>
+    /// 取 1 是保守值：把每个 CJK 字符都当成至少一个 token。
+    /// </remarks>
+    public const int CjkCharsPerToken = 1;
 
-    /// <summary>估算整段历史的 token 数。</summary>
-    public static int Estimate(IEnumerable<AgentMessage> messages) =>
-        messages.Sum(m => Estimate(m.Content));
+    /// <summary>每条消息的固定开销（角色标记、分隔符等），来自实测的截距。</summary>
+    public const int PerMessageOverheadTokens = 4;
+
+    /// <summary>
+    /// 估算一段文本的 token 数，区分 CJK 与其它字符。
+    /// </summary>
+    /// <remarks>
+    /// 之前所有文本一律按 2 字符/token 估算。实测表明这个值在两种方向上都会错：
+    /// ASCII 长文本真实约 8 字符/token（高估 4 倍，导致过早压缩），
+    /// CJK 约 1.2 字符/token（略低估）。按字符类别分开估算是唯一能把两者都覆盖的做法。
+    /// </remarks>
+    public static int Estimate(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return 0;
+
+        var cjk = 0;
+        foreach (var character in text)
+            if (IsCjk(character)) cjk++;
+
+        var other = text.Length - cjk;
+        var tokens = CjkDiv(cjk, CjkCharsPerToken) + AsciiDiv(other, AsciiCharsPerToken);
+        return Math.Max(1, tokens);
+    }
+
+    /// <summary>估算整段历史的 token 数，计入每条消息的固定开销。</summary>
+    public static int Estimate(IEnumerable<AgentMessage> messages)
+    {
+        var total = 0;
+        foreach (var message in messages)
+        {
+            total += PerMessageOverheadTokens + Estimate(message.Content);
+            // 工具调用的请求本身也占上下文（id、工具名、参数）。
+            foreach (var call in message.ToolCalls)
+                total += Estimate(call.ToolId) + Estimate(call.Arguments.GetRawText()) + 8;
+        }
+
+        return total;
+    }
+
+    private static int CjkDiv(int count, int perToken) =>
+        count == 0 ? 0 : (count + perToken - 1) / perToken;
+
+    private static int AsciiDiv(int count, int perToken) =>
+        count == 0 ? 0 : (count + perToken - 1) / perToken;
+
+    /// <summary>
+    /// 是否属于 CJK 及其相邻文字系统（中日韩、全角符号）。
+    /// </summary>
+    /// <remarks>
+    /// 只按码位范围判断，不做语言识别：目的是把"分词粒度粗"的字符
+    /// 与"分词粒度细"的拉丁字符分开估算，粗分类已足够。
+    /// </remarks>
+    private static bool IsCjk(char character) => character switch
+    {
+        >= '一' and <= '鿿' => true,   // CJK 统一表意文字
+        >= '㐀' and <= '䶿' => true,   // 扩展 A
+        >= '぀' and <= 'ヿ' => true,   // 日文假名
+        >= '가' and <= '힯' => true,   // 韩文音节
+        >= '豈' and <= '﫿' => true,   // 兼容表意文字
+        >= '＀' and <= '￯' => true,   // 全角符号
+        >= '　' and <= '〿' => true,   // CJK 标点
+        _ => false,
+    };
 
     /// <summary>
     /// 计算可用于输入的有效预算：上下文窗口扣除输出余量与估算误差。

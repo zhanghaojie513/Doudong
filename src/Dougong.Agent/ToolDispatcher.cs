@@ -391,33 +391,15 @@ public sealed class ToolDispatcher : IToolDispatcher
         new(invocation.InvocationId, invocation.ToolId, outcome, Diagnostic: diagnostic);
 
     /// <summary>
-    /// 最小 JSON Schema 校验：只检查顶层 type 与 required。
-    /// 完整校验器属于后续切片；这里刻意保持小，避免宣称尚未实现的能力。
+    /// 按 schema 校验参数。委托给 <see cref="ToolSchemaValidator"/>：
+    /// 校验范围与"不支持的关键字必须报错"的立场都定义在那里。
     /// </summary>
-    private static string? ValidateArguments(JsonElement schema, JsonElement arguments)
-    {
-        if (arguments.ValueKind is not JsonValueKind.Object)
-            return "调用参数必须是 JSON 对象。";
-
-        if (schema.TryGetProperty("type", out var type)
-            && type.ValueKind is JsonValueKind.String
-            && !string.Equals(type.GetString(), "object", StringComparison.Ordinal))
-            return $"工具参数 schema 的顶层类型必须是 object，实际为 '{type.GetString()}'。";
-
-        if (!schema.TryGetProperty("required", out var required)
-            || required.ValueKind is not JsonValueKind.Array)
-            return null;
-
-        foreach (var item in required.EnumerateArray())
-        {
-            var name = item.GetString();
-            if (name is null) continue;
-            if (!arguments.TryGetProperty(name, out _))
-                return $"缺少必需参数 '{name}'。";
-        }
-
-        return null;
-    }
+    /// <remarks>
+    /// 曾经只检查顶层 type 与 required。M2 接入 MCP 之后不再够用——
+    /// schema 来自不可信远端，只查 required 意味着它声明的类型约束形同虚设。
+    /// </remarks>
+    private static string? ValidateArguments(JsonElement schema, JsonElement arguments) =>
+        ToolSchemaValidator.Validate(schema, arguments);
 
     private sealed record Registration(IAgentTool Tool, ToolDescriptor Descriptor);
 
