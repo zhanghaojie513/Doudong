@@ -166,7 +166,9 @@ public static class Program
             new ToolResourceGate(),
             sessionId, "turn-1", workspace,
             TimeSpan.FromMinutes(5),
-            new WorkspacePathGuard(workspace));
+            new WorkspacePathGuard(workspace),
+            // 审批决定与运行终态随会话落盘：恢复时才能回答"这个调用当初经过审批了吗"。
+            store);
 
         // 默认只给工作区内文件读写。shell 权限最大，必须显式开启：
         // 它按 Execute 处理并取工作区独占锁，但无法把命令限制在工作区内。

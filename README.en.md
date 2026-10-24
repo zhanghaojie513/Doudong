@@ -42,7 +42,7 @@ The repository currently contains:
 - `Dougong.Agent` — loop, commit barrier, approval, resource coordination, file-version recheck and context compaction are implemented
 - `Dougong.Ai` — three wire-protocol connectors and the `ChatClientFactory` are implemented
 - `Dougong.Mcp`, `Dougong.Acp` — still skeletons (M2)
-- `Dougong.Cli` — a runnable host: REPL + approval + in-workspace read/write + JSONL sessions
+- `Dougong.Cli` — a runnable host: REPL + approval + in-workspace read/write + JSONL sessions + a shell tool + context compaction
 
 ## Why Dougong
 
@@ -101,7 +101,7 @@ Dougong focuses on the **supporting layer** for agents — not on any particular
 | `Dougong.Ai` | Three wire-protocol connectors, `ChatClientFactory` | M1 implemented; usage accounting pending |
 | `Dougong.Mcp` | MCP server ↔ agent tool bridge | Skeleton (M2) |
 | `Dougong.Acp` | ACP agent-side adapter | Skeleton (M2) |
-| `Dougong.Cli` | Headless reference host | Runnable; all three protocols selectable |
+| `Dougong.Cli` | Headless reference host | Runnable; three protocols, session resume/branch, compaction |
 | `Dougong.Telemetry` | OpenTelemetry bridge | Planned |
 
 ## Getting Started

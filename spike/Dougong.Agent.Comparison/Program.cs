@@ -48,6 +48,9 @@ public static class Program
         if (args.FirstOrDefault() == "wiring")
             return await CompactionWiringChecks.RunAsync();
 
+        if (args.FirstOrDefault() == "approval-log")
+            return await ApprovalPersistenceChecks.RunAsync();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 

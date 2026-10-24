@@ -110,13 +110,13 @@ public sealed class LoopAgentRuntime(
                 // 取消与失败必须先处理：此时 Current 不可访问。
                 if (cancelled)
                 {
-                    yield return new AgentEvent.RunFinished(AgentRunOutcome.Cancelled, "模型调用被取消。");
+                    yield return await FinishAsync(AgentRunOutcome.Cancelled, "模型调用被取消。", cancellationToken).ConfigureAwait(false);
                     yield break;
                 }
 
                 if (streamFailure is not null)
                 {
-                    yield return new AgentEvent.RunFinished(AgentRunOutcome.Failed, streamFailure);
+                    yield return await FinishAsync(AgentRunOutcome.Failed, streamFailure, cancellationToken).ConfigureAwait(false);
                     yield break;
                 }
 
@@ -208,7 +208,7 @@ public sealed class LoopAgentRuntime(
                     });
                 }
 
-                yield return new AgentEvent.RunFinished(AgentRunOutcome.Completed);
+                yield return await FinishAsync(AgentRunOutcome.Completed, null, cancellationToken).ConfigureAwait(false);
                 yield break;
             }
 
@@ -224,8 +224,8 @@ public sealed class LoopAgentRuntime(
                     yield return new AgentEvent.ToolCallCompleted(rejected);
                 }
 
-                yield return new AgentEvent.RunFinished(
-                    AgentRunOutcome.InvalidModelResponse, "模型响应包含无效调用。");
+                yield return await FinishAsync(
+                    AgentRunOutcome.InvalidModelResponse, "模型响应包含无效调用。", cancellationToken).ConfigureAwait(false);
                 yield break;
             }
 
@@ -243,8 +243,8 @@ public sealed class LoopAgentRuntime(
                         Diagnostic: "本轮存在重复调用 ID。"));
                 }
 
-                yield return new AgentEvent.RunFinished(
-                    AgentRunOutcome.InvalidModelResponse, "模型响应包含重复调用 ID。");
+                yield return await FinishAsync(
+                    AgentRunOutcome.InvalidModelResponse, "模型响应包含重复调用 ID。", cancellationToken).ConfigureAwait(false);
                 yield break;
             }
 
@@ -319,7 +319,7 @@ public sealed class LoopAgentRuntime(
 
             if (cancellationToken.IsCancellationRequested)
             {
-                yield return new AgentEvent.RunFinished(AgentRunOutcome.Cancelled);
+                yield return await FinishAsync(AgentRunOutcome.Cancelled, null, cancellationToken).ConfigureAwait(false);
                 yield break;
             }
 
@@ -328,7 +328,7 @@ public sealed class LoopAgentRuntime(
             AppendToolExchange(history, calls, toolResults, text.ToString(), reasoning.ToString());
         }
 
-        yield return new AgentEvent.RunFinished(AgentRunOutcome.ToolRoundLimitReached);
+        yield return await FinishAsync(AgentRunOutcome.ToolRoundLimitReached, null, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -382,6 +382,45 @@ public sealed class LoopAgentRuntime(
                     ["name"] = toolId,
                 },
             });
+        }
+    }
+
+    /// <summary>
+    /// 运行终止的统一出口：先提交终态记录，再返回事件。
+    /// </summary>
+    /// <remarks>
+    /// 收口到一个方法而不是在每个 <c>yield break</c> 前各写一遍：
+    /// 终止点有七处（完成、取消、流中断、两种无效响应、轮次上限），
+    /// 逐处插入容易漏，漏掉的那一处会让恢复时看不出这个 turn 是否正常结束。
+    /// <para>
+    /// 提交失败不改变已经发生的事实：仍要发出 <see cref="AgentEvent.RunFinished"/>，
+    /// 否则调用方会以为运行还在继续。失败原因并入诊断。
+    /// </para>
+    /// </remarks>
+    private async ValueTask<AgentEvent.RunFinished> FinishAsync(
+        AgentRunOutcome outcome, string? diagnostic, CancellationToken cancellationToken)
+    {
+        if (store is null) return new AgentEvent.RunFinished(outcome, diagnostic);
+
+        var payload = JsonSerializer.SerializeToElement(new
+        {
+            outcome = outcome.ToString(),
+            diagnostic,
+        });
+
+        try
+        {
+            await store.CommitAsync(
+                new StoreRecord(0, StoreRecordKind.RunFinished, payload),
+                cancellationToken).ConfigureAwait(false);
+            return new AgentEvent.RunFinished(outcome, diagnostic);
+        }
+        catch (Exception ex)
+        {
+            var combined = diagnostic is null
+                ? $"运行终态提交失败：{ex.Message}"
+                : $"{diagnostic} | 运行终态提交失败：{ex.Message}";
+            return new AgentEvent.RunFinished(outcome, combined);
         }
     }
 

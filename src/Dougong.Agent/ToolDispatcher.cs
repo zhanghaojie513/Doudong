@@ -33,7 +33,8 @@ public sealed class ToolDispatcher : IToolDispatcher
         string turnId = "turn",
         string workspace = ".",
         TimeSpan? approvalValidity = null,
-        WorkspacePathGuard? pathGuard = null)
+        WorkspacePathGuard? pathGuard = null,
+        IAgentStore? store = null)
     {
         _approver = approver;
         _gate = gate;
@@ -42,7 +43,10 @@ public sealed class ToolDispatcher : IToolDispatcher
         _workspace = workspace;
         _approvalValidity = approvalValidity ?? TimeSpan.FromMinutes(5);
         _pathGuard = pathGuard;
+        _store = store;
     }
+
+    private readonly IAgentStore? _store;
 
     private readonly Dictionary<string, Registration> _tools = new(StringComparer.Ordinal);
     private readonly HashSet<string> _seenInvocations = new(StringComparer.Ordinal);
@@ -155,6 +159,18 @@ public sealed class ToolDispatcher : IToolDispatcher
                     registration.Descriptor, invocation.Arguments, permission,
                     execution, _workspace, binding),
                 cancellationToken).ConfigureAwait(false);
+
+            // 审批决定必须落盘后再继续：否则"已批准"这件事没有被持久化，
+            // 而副作用却发生了，恢复时无法对账。
+            if (await CommitApprovalAsync(
+                    registration, invocation, decision, binding, cancellationToken)
+                    .ConfigureAwait(false) is { } approvalFailure)
+            {
+                return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
+                    ToolCallOutcome.Failed,
+                    Diagnostic: $"审批记录提交失败，未执行：{approvalFailure}",
+                    Permission: permission);
+            }
 
             if (!decision.Approved)
                 return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
@@ -314,6 +330,45 @@ public sealed class ToolDispatcher : IToolDispatcher
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// 提交一条审批决定。返回 null 表示已提交（或无需提交），非空为失败原因。
+    /// </summary>
+    /// <remarks>
+    /// 记录里带上参数摘要：只记"调用 c1 被批准"不足以证明批准的是**这一次**参数，
+    /// 同名工具换参数再跑一次就会共享同一条授权。
+    /// </remarks>
+    private async ValueTask<string?> CommitApprovalAsync(
+        Registration registration,
+        ToolInvocation invocation,
+        ToolApprovalDecision decision,
+        ApprovalBinding binding,
+        CancellationToken cancellationToken)
+    {
+        if (_store is null) return null;
+
+        var record = new ApprovalRecord(
+            invocation.InvocationId,
+            registration.Descriptor.Id,
+            registration.Descriptor.Version,
+            decision.Approved,
+            decision.Reason,
+            binding.ArgumentsDigest,
+            _workspace,
+            DateTimeOffset.UtcNow);
+
+        try
+        {
+            await _store.CommitAsync(
+                new StoreRecord(0, StoreRecordKind.ApprovalDecision, record.ToJson()),
+                cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"{ex.GetType().Name}: {ex.Message}";
+        }
     }
 
     private static ToolDispatchResult Reject(

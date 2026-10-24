@@ -63,7 +63,7 @@ status.md 的记录不够准确（写了"未实现真实模型摘要"，但没�
 - **G8（token 估算非真实计数）同时缓解**：`UsageRecord.InputTokens` 已可对照校准，
   但换算因子尚未回填为默认值，仍按 2 字符/token 保守估算
 
-### G2. 审批决定没有持久化（中）
+### G2. 审批决定没有持久化（中）— **已修复**
 
 **事实**：`StoreRecordKind.ApprovalDecision` 枚举值存在，但全仓库使用点 **0 处**。
 `RunFinished` 同样 0 处。
@@ -75,6 +75,17 @@ status.md 的记录不够准确（写了"未实现真实模型摘要"，但没�
 `RunFinished` 在每次运行终止时提交。两者都要在既有四个提交屏障的框架内。
 
 **验收**：崩溃恢复后能列出"哪些调用有审批记录、哪些没有"。
+
+**完成情况（2026-10-24）**：
+- `ToolDispatcher` 新增可选 `IAgentStore`；审批后立即提交 `ApprovalDecision`，
+  记录绑定 invocationId / 工具身份与版本 / 参数摘要 / 工作区 / 决定时刻
+- 提交失败阻止执行并返回 `Failed`：否则"已批准"未被持久化而副作用已发生
+- 新增 `ApprovalLog` + `ApprovalSnapshot`：`IsUnaccounted` 让"有调用但无审批记录"
+  可表达，不与"被拒绝"混淆
+- **G3 一并修复**：`RunFinished` 收口到 `FinishAsync` 单一出口（原先七处 `yield break`
+  逐处插入容易漏），提交失败不改变已发生的事实，只并入诊断
+- 7 项自检（`-- approval-log`，含两个反证）；真实端点日志确认六段记录齐全：
+  UserInput → ModelResponse → ToolCallStarted → ApprovalDecision → ToolCallCompleted → RunFinished
 
 ---
 
@@ -129,8 +140,8 @@ status.md 的记录不够准确（写了"未实现真实模型摘要"，但没�
 | ID | 缺口 | 严重度 | 状态 | 证据 |
 |---|---|---|---|---|
 | G1 | 上下文压缩未接入循环 | 阻断 | **已修**（ec59191 之后） | `-- wiring` 9 项；真实端点 9418→3445 tokens |
-| G2 | 审批决定未持久化 | 中 | 待修 | `StoreRecordKind.ApprovalDecision` 使用点 0 |
-| G3 | `RunFinished` 未持久化 | 低 | 待修 | 使用点 0；影响恢复时判断 turn 是否正常结束 |
+| G2 | 审批决定未持久化 | 中 | **已修** | `-- approval-log` 7 项；真实日志含 ApprovalDecision |
+| G3 | `RunFinished` 未持久化 | 低 | **已修** | 统一收口 `FinishAsync`；`-- approval-log` 覆盖 |
 | G4 | 完整 JSON Schema 校验 | 中 | 待定 | 仅校验顶层 `type` + `required`；嵌套与类型不校验 |
 | G5 | 资源级读写键 | 低 | 待定 | 只有 `Serial` / `WorkspaceExclusive` 两级 |
 | G6 | 工具替换语义未测 | 低 | 待定 | `Register` 句柄可撤销，但未做"替换后旧审批失效"的测试 |
@@ -146,7 +157,11 @@ status.md 的记录不够准确（写了"未实现真实模型摘要"，但没�
 
 ## 六、下一个具体动作
 
-**执行 G1**，分三步，每步都要有失败证据：
+**G1/G2/G3 已完成。下一步执行 M2 的 2.1 项：MCP 工具桥接。**
+
+## 已完成动作（留档）
+
+**G1**，分三步，每步都要有失败证据：
 
 1. **写探针证明缺口**：构造一段足够长的历史，验证 `LoopAgentRuntime` 把全部历史送进
    `history`、没有任何裁剪。这一步可能发现比"没接压缩"更具体的问题
