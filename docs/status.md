@@ -194,6 +194,29 @@
 - [ ] M2 L1 默认候选待审；受限自动启用需用户选择，来源/作用域/撤销/隐私双数据流和最小留出评测齐备。
 - [ ] M3 API/行为兼容、作者模板和卸载测试稳定化；完整 Skill 进化和评测优化按验证结果后续建设。
 
+## 依赖版本
+
+2026-10-24 对照 NuGet 最新稳定版核对。原则：不锁定过时版本，也不追预览版。
+
+| 包 | 版本 | 位置 | 说明 |
+|---|---|---|---|
+| `Microsoft.Extensions.AI.Abstractions` | 10.11.0 | Agent、Ai、spike | 已是当前最新稳定版 |
+| `Microsoft.Agents.AI` | 1.26.0 | 仅 spike（候选 A 对比基线） | 最新稳定版；结论是不能依赖，见 m1-candidate-comparison.md |
+| `xunit.v3` | 4.0.2 | 内核测试 | v2 主线已由 v3 接替；M0 测试全部迁移通过 |
+| `ModelContextProtocol` | 2.3.0 | M2 计划 | 尚未引入 |
+| `OpenTelemetry` | 1.20.1 | M2 计划 | 尚未引入 |
+
+- 测试栈从 xUnit v2 + VSTest adapter 迁到 **xUnit v3 + Microsoft.Testing.Platform**：
+  `global.json` 固定 SDK 并启用 MTP 运行器，`Microsoft.NET.Test.Sdk` 与
+  `xunit.runner.visualstudio` 已不再需要，删除后 156 项测试仍全绿。
+- 迁移暴露一个**测试自身的缺陷**：`Publish_does_not_run_handler_on_publisher_thread`
+  在线程池线程上发布再比较线程 ID。事件泵也跑在线程池上，线程池可能复用发布线程，
+  于是这个断言在 xUnit v3 的并行调度下稳定失败（VSTest 的时序恰好掩盖了它）。
+  已改为在专用非线程池线程上发布；反证确认原写法 5 轮中 2 轮失败。
+- xUnit v3 的 `xUnit1051`（建议统一传 `TestContext.Current.CancellationToken`）在
+  `.editorconfig` 中降级为建议：内核测试大量 await 的是引擎内部的取消路径，
+  统一塞入测试级令牌会把"取消是否被正确传播"与"测试是否超时"混在一起。
+
 ## 约定
 
 - 当前 API 全部 experimental，编译契约详细定义以 architecture.md 为准，design.md 保持摘要和决策，避免复制多份接口后漂移。
@@ -234,6 +257,11 @@
   9 项自检通过（含反证）；等待审批期间不持锁，避免慢审批阻塞工作区。
 - 2026-10-24：M1 提交屏障：`IAgentStore` 契约与 JSONL 实现，四个提交落点串起
   "先提交意图、再产生副作用"；6 项自检通过，并用移除屏障的反证确认测试有效。
+- 2026-10-24：依赖版本与测试栈核对：对照 NuGet 最新稳定版，AI 抽象 10.11.0 与 MAF 1.26.0
+  已是最新；测试栈从 xUnit v2 + VSTest 迁到 xUnit v3 4.0.2 + Microsoft.Testing.Platform
+  （删除 `Microsoft.NET.Test.Sdk` 与 `xunit.runner.visualstudio`）。迁移暴露并修复一个
+  测试自身的并发缺陷（线程池复用导致线程 ID 断言不稳定，反证 5 轮中 2 轮失败）。
+
 - 2026-10-24：M1 会话恢复与分支：`SessionRecovery`/`SessionBranch` 落地，
   CLI 支持 `--list`/`--resume`/`--branch --at N`；9 项会话自检（含三个反证）。
   期间修掉两个真实缺陷：日志 Payload 双重编码、在工具交互中间分叉留下悬空 tool_calls

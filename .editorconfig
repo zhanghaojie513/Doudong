@@ -1,0 +1,9 @@
+root = true
+
+[*.cs]
+# xUnit v3 的 analyzer 建议所有可取消调用都传 TestContext.Current.CancellationToken，
+# 以便测试超时时能真正打断。内核测试里大量 await 的是引擎自身的内部路径
+# （激活、排空、事件泵），这些路径的取消语义本身就是被测行为：
+# 统一塞进测试级取消令牌会让"取消是否被正确传播"与"测试是否超时"两件事混在一起。
+# 因此显式降级为建议，错误（error）仍保持为构建失败。
+dotnet_diagnostic.xUnit1051.severity = suggestion

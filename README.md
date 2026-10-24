@@ -121,6 +121,16 @@ dotnet build Dougong.slnx -c Release
 dotnet test Dougong.slnx -c Release --no-build
 ```
 
+测试栈为 xUnit v3 4.0.2 + Microsoft.Testing.Platform；`global.json` 已指定 SDK 与 MTP
+运行器，因此 `dotnet test` 走新体验，不需要 VSTest adapter。
+
+```bash
+# 确定性自检套件（不联网）
+for m in wire session contract store approval fileversion compaction failure; do
+  dotnet run --project spike/Dougong.Agent.Comparison -c Release --no-build -- $m
+done
+```
+
 ### 打包
 
 ```bash

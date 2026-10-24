@@ -33,10 +33,32 @@ public sealed class KernelEventBusTests
         }));
         await kernel.RegisterAsync(() => plugin);
 
-        plugin.Context!.Events.Publish(1);
+        // 断言的意图是"处理器不在发布者的线程上运行"，即 Publish 不同步调用处理器。
+        // 不能只比较线程 ID 后就在线程池线程上发布：事件泵跑在线程池上，
+        // 线程池可能把发布线程复用于泵回调，"两线程不同"因此不是稳定性质
+        // （xunit v3 并行执行时会稳定撞上）。
+        // 也不能断言"Publish 返回时处理器尚未运行"：Publish 是投递，
+        // 泵与发布并发推进，处理器在 Publish 返回前开始运行是合法的。
+        // 用一条专用非线程池线程发布，处理器则仍在线程池的泵上执行，
+        // 这样"不同线程"才是可依赖的性质。
+        var publisherThread = 0;
+        var publishReturned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var publisher = new Thread(() =>
+        {
+            publisherThread = Environment.CurrentManagedThreadId;
+            plugin.Context!.Events.Publish(1);
+            publishReturned.TrySetResult();
+        })
+        {
+            IsBackground = true,
+        };
+
+        publisher.Start();
+        await publishReturned.Task.WaitAsync(Timeout);
         await gate.Task.WaitAsync(Timeout);
 
-        Assert.NotEqual(Environment.CurrentManagedThreadId, handlerThread);
+        Assert.NotEqual(publisherThread, handlerThread);
     }
 
     [Fact]

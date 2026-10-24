@@ -2,19 +2,17 @@
 
   <PropertyGroup>
     <!-- M0：内核零第三方依赖（设计红线，docs/design.md §3）。
-         首批包随里程碑引入：
-           M1: Microsoft.Extensions.AI 10.11.0（已核实版本）
-           M2: ModelContextProtocol 2.3.0、OpenTelemetry.*
-    -->
+         首批包随里程碑引入，版本以 NuGet 最新稳定版为准（2026-10-24 核对）：
+           M1: Microsoft.Extensions.AI.Abstractions 10.11.0、xunit.v3 4.0.2
+           M2: ModelContextProtocol 2.3.0、OpenTelemetry 1.20.1
+         升级规则见 docs/status.md「依赖版本」一节：只随里程碑升级，并跑完整回归。 -->
   </PropertyGroup>
 
   <ItemGroup>
     <!-- M1：Agent 只依赖 AI 抽象，不依赖具体连接器；内核仍保持零第三方依赖。 -->
     <PackageVersion Include="Microsoft.Agents.AI" Version="1.26.0" />
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.11.0" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
-    <PackageVersion Include="xunit" Version="2.9.3" />
-    <PackageVersion Include="xunit.runner.visualstudio" Version="3.0.2" />
+    <PackageVersion Include="xunit.v3" Version="4.0.2" />
   </ItemGroup>
 
 </Project>
