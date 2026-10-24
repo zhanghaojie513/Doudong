@@ -27,6 +27,9 @@ public static class Program
         if (args.FirstOrDefault() == "fileversion")
             return await FileVersionChecks.RunAsync();
 
+        if (args.FirstOrDefault() == "compaction")
+            return await CompactionChecks.RunAsync();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 
