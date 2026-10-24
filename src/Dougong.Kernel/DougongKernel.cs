@@ -488,7 +488,16 @@ public sealed partial class DougongKernel : IAsyncDisposable
         Task? activationTask = null;
         try
         {
-            activationTask = RunActivationCallbackAsync(entry, context);
+            // 必须把回调放到线程池上执行，否则超时预算对"同步阻塞"的回调完全无效：
+            // RunActivationCallbackAsync 虽然返回 Task，但在遇到第一个真正异步的
+            // await 之前是同步执行的，于是这一行本身就卡在评估循环的线程上，
+            // 后面的 WaitAsync(ActivationTimeout) 根本没机会开始计时。
+            // 放到 Task.Run 之后，卡住的是线程池线程，WaitAsync 才能按时触发，
+            // 超时路径（隔离该代次）也才真正可用。
+            //
+            // AsyncLocal 语义已验证：Task.Run 内部能读到调用方的 _activationScope /
+            // _callback，内部设置的值在内部持续有效，且不会污染调用方。
+            activationTask = Task.Run(() => RunActivationCallbackAsync(entry, context));
             if (ActivationTimeout == Timeout.InfiniteTimeSpan)
             {
                 await activationTask.ConfigureAwait(false);

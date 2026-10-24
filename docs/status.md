@@ -280,6 +280,13 @@
   9 项自检通过（含反证）；等待审批期间不持锁，避免慢审批阻塞工作区。
 - 2026-10-24：M1 提交屏障：`IAgentStore` 契约与 JSONL 实现，四个提交落点串起
   "先提交意图、再产生副作用"；6 项自检通过，并用移除屏障的反证确认测试有效。
+- 2026-10-24：内核对抗性审查：6 个维度共 20 项攻击探针（`KernelAdversarialTests`、
+  `KernelDrainProbeTests`）。发现并修复 1 个真实缺陷：同步阻塞的激活回调会独占
+  评估循环，使 `ActivationTimeout` 完全无效，其它插件的生命周期变更无限排队。
+  修法是回调改为 `Task.Run` 启动；修复前先实测验证了 `Task.Run + WaitAsync` 的
+  超时有效性与 `AsyncLocal` 的跨线程传递语义，并有反证。其余 15 类攻击未击穿
+  不变量。详见 [kernel-adversarial-review.md](kernel-adversarial-review.md)。
+
 - 2026-10-24：修掉一个 M0 遗留的真实内核缺陷：插件装配回落到宿主进程中
   未登记的共享契约时，加载会静默成功。根因是 `PluginLoadContext.Load` 在插件目录
   解析不到时返回 null，运行时于是回落到默认 ALC——只要同名程序集碰巧已在进程里，
