@@ -14,6 +14,33 @@ namespace Dougong.Agent;
 public sealed class ToolDispatcher : IToolDispatcher
 {
     private readonly object _sync = new();
+    private readonly IToolApprover? _approver;
+    private readonly ToolResourceGate? _gate;
+    private readonly string _sessionId;
+    private readonly string _turnId;
+    private readonly string _workspace;
+    private readonly TimeSpan _approvalValidity;
+
+    /// <summary>
+    /// 建立 dispatcher。审批器、资源闸门与工作区都可省略：
+    /// 省略即表示"无审批要求"，仅用于测试与对比；生产宿主必须显式提供审批器。
+    /// </summary>
+    public ToolDispatcher(
+        IToolApprover? approver = null,
+        ToolResourceGate? gate = null,
+        string sessionId = "session",
+        string turnId = "turn",
+        string workspace = ".",
+        TimeSpan? approvalValidity = null)
+    {
+        _approver = approver;
+        _gate = gate;
+        _sessionId = sessionId;
+        _turnId = turnId;
+        _workspace = workspace;
+        _approvalValidity = approvalValidity ?? TimeSpan.FromMinutes(5);
+    }
+
     private readonly Dictionary<string, Registration> _tools = new(StringComparer.Ordinal);
     private readonly HashSet<string> _seenInvocations = new(StringComparer.Ordinal);
 
@@ -93,15 +120,50 @@ public sealed class ToolDispatcher : IToolDispatcher
             return Reject(invocation, ToolCallOutcome.RejectedInvalidArguments, validation);
 
         ToolPermission permission;
+        ToolExecutionPlan execution;
         try
         {
             permission = registration.Tool.DescribePermission(invocation.Arguments);
+            execution = registration.Tool.DescribeExecution(invocation.Arguments);
         }
         catch (Exception ex)
         {
             return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
-                ToolCallOutcome.Failed, Diagnostic: $"权限描述失败：{ex.Message}");
+                ToolCallOutcome.Failed, Diagnostic: $"权限/执行计划描述失败：{ex.Message}");
         }
+
+        // 阶段一：预检（不持锁）。审批绑定必须基于规范化参数与本次权限描述。
+        var binding = ArgumentCanonicalizer.Bind(
+            _sessionId, _turnId, invocation.InvocationId,
+            registration.Descriptor, invocation.Arguments, permission,
+            _workspace, _approvalValidity);
+
+        if (_approver is not null)
+        {
+            // 等待审批期间不持任何锁：慢审批不应阻塞整个工作区。
+            var decision = await _approver.RequestApprovalAsync(
+                new ToolApprovalRequest(
+                    _sessionId, _turnId, invocation.InvocationId,
+                    registration.Descriptor, invocation.Arguments, permission,
+                    execution, _workspace, binding),
+                cancellationToken).ConfigureAwait(false);
+
+            if (!decision.Approved)
+                return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
+                    ToolCallOutcome.RejectedNotApproved,
+                    Diagnostic: decision.Reason ?? "审批未通过。",
+                    Permission: permission);
+        }
+
+        // 阶段二：进锁后复核（防"批准 A、执行 B"）。
+        using var lease = _gate is null
+            ? null
+            : await _gate.EnterAsync(execution, _workspace, cancellationToken).ConfigureAwait(false);
+
+        if (!approvalIsStillValid(registration, invocation, permission, execution, binding, out var staleReason))
+            return new ToolDispatchResult(invocation.InvocationId, invocation.ToolId,
+                ToolCallOutcome.RejectedNotApproved,
+                Diagnostic: staleReason, Permission: permission);
 
         try
         {
@@ -122,6 +184,64 @@ public sealed class ToolDispatcher : IToolDispatcher
                 ToolCallOutcome.Failed, Diagnostic: $"{ex.GetType().Name}: {ex.Message}",
                 Permission: permission);
         }
+    }
+
+    /// <summary>
+    /// 执行前复核：重新描述权限与执行计划，重算绑定，比对全部维度。
+    /// 任一项变化即拒绝，要求重新审批。
+    /// </summary>
+    private static bool approvalIsStillValid(
+        Registration registration, ToolInvocation invocation, ToolPermission approvedPermission,
+        ToolExecutionPlan approvedExecution, ApprovalBinding approvedBinding, out string reason)
+    {
+        reason = string.Empty;
+
+        if (!approvedBinding.IsUnexpired(DateTimeOffset.UtcNow))
+        {
+            reason = "审批已过期。";
+            return false;
+        }
+
+        ToolPermission currentPermission;
+        ToolExecutionPlan currentExecution;
+        try
+        {
+            currentPermission = registration.Tool.DescribePermission(invocation.Arguments);
+            currentExecution = registration.Tool.DescribeExecution(invocation.Arguments);
+        }
+        catch (Exception ex)
+        {
+            reason = $"复核时无法重新描述权限：{ex.Message}";
+            return false;
+        }
+
+        // 只比较"批准了什么"，时刻由 IsUnexpired 单独判断。
+        var current = approvedBinding with
+        {
+            ArgumentsDigest = ArgumentCanonicalizer.Digest(invocation.Arguments),
+            PermissionScope = ArgumentCanonicalizer.DescribeScope(currentPermission),
+        };
+
+        if (!approvedBinding.Matches(current))
+        {
+            reason = "执行前复核不通过：参数、权限或资源计划与批准时不一致。";
+            return false;
+        }
+
+        if (currentExecution.Concurrency != approvedExecution.Concurrency)
+        {
+            reason = "执行前复核不通过：并发要求与批准时不一致。";
+            return false;
+        }
+
+        // 未知权限不能被当作已知放行。
+        if (!currentPermission.IsKnown && approvedPermission.IsKnown)
+        {
+            reason = "执行前复核不通过：权限从已知变为未知。";
+            return false;
+        }
+
+        return true;
     }
 
     private static ToolDispatchResult Reject(

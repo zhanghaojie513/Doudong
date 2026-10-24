@@ -21,6 +21,9 @@ public static class Program
         if (args.FirstOrDefault() == "store")
             return await StoreBarrierChecks.RunAsync();
 
+        if (args.FirstOrDefault() == "approval")
+            return await ApprovalChecks.RunAsync();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 

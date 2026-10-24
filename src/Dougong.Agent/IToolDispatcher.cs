@@ -49,6 +49,9 @@ public enum ToolCallOutcome
     /// <summary>执行前被取消，未执行。</summary>
     CancelledBeforeExecution,
 
+    /// <summary>审批被拒绝，或执行前复核发现与批准时不一致，未执行。</summary>
+    RejectedNotApproved,
+
     /// <summary>执行过程中被取消。</summary>
     CancelledDuringExecution,
 

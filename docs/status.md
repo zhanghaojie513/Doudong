@@ -94,8 +94,13 @@
   - **工具声明通道已落地**：`Dougong.Agent.ToolDeclarations` 通过 `ChatOptions` 附加属性
     （键 `dougong.toolDeclarations`）传递冻结描述符，运行时与连接器解耦；
     附 6 项契约自检（`-- contract`）。
-  - **未实现**：审批流程、资源锁与工作区独占、执行前文件版本复核、完整 schema 校验器。
-    因此当前不得宣称具备“批准 A 执行 B”的防护。
+  - 已实现审批与资源锁（`IToolApprover.cs`、`ToolResourceGate.cs`）：
+    审批绑定 session/turn/invocation/工具版本/规范化参数摘要/工作区/权限范围/有效期；
+    执行前进锁复核，参数、权限或并发计划任一变化即拒绝；等待审批期间不持锁；
+    两档并发（Serial / WorkspaceExclusive）。
+  - 9 项自检（`-- approval`）全部通过，并用禁用复核的反证确认测试有效
+    （权限升级、并发变化、过期三项立刻失败）。
+  - **未实现**：执行前文件版本复核、完整 JSON Schema 校验器、资源级读写键。
 - [ ] 显式存储提交、单写者租约、半条尾记录处理、结果未知恢复、分支一致切面及预算/压缩失败协议。
   - 已实现（`src/Dougong.Agent/IAgentStore.cs`、`JsonlAgentStore.cs`）：提交屏障四个落点
     （用户输入→模型响应→工具开始→工具终态）、单写者 `FileShare.None` 租约、
@@ -156,6 +161,8 @@
 - 2026-10-23：处理外部引用治理：`PluginHandle`/`PluginSummary` 不再携带 `PluginManifest`，只保留 Id/Version/State；完整清单改由 `GetPluginManifestAsync` 显式取得。实证保留快照不再阻止动态插件 ALC 回收，显式持有清单仍会（属调用方主动选择）。Release 构建与 143 项内核测试通过。
 - 2026-10-23：最终复审发现共享契约登记是进程级静态状态且不可撤销，漏配时插件会先登记、激活失败、留下不可卸载的隔离代次。改为 `DougongKernel.RegisterSharedContract`（按内核实例隔离、返回句柄可撤销）；装配解析失败时 `LoadAsync` 回滚条目并抛出提示登记契约的可操作诊断。Release 构建与 146 项内核测试通过。
 - 2026-10-24：M0 关闭复审：`PluginManifest` 改为只读快照（外部改动不再能绕过依赖判定），移除死字段；13 项独立探测全部通过，M0 验收项据此勾选。
+- 2026-10-24：M1 审批与资源锁：审批凭据绑定八项维度并做执行前复核，
+  9 项自检通过（含反证）；等待审批期间不持锁，避免慢审批阻塞工作区。
 - 2026-10-24：M1 提交屏障：`IAgentStore` 契约与 JSONL 实现，四个提交落点串起
   "先提交意图、再产生副作用"；6 项自检通过，并用移除屏障的反证确认测试有效。
 - 2026-10-24：M1 真实 provider 验证：用 MiMo 与 MiniMax 各跑 5 项真实调用（含真实编码任务），全部通过；期间修复三个仅真实协议暴露的缺陷（工具声明未传给模型、空 choices 越界、参数分片语义）。
