@@ -141,7 +141,18 @@
     并发派发的执行次数等于报告成功次数（单一执行入口）、提交失败发生在副作用之前、
     崩溃窗口报 `OutcomeUnknown` 而非重放。重复 5 轮全绿。
   - 这一套立刻抓到一个真实缺陷（两档并发不互斥），见上一节。
-  - **未覆盖**：跨会话 shell（尚未实现 shell 工具）、工具替换（`Register` 句柄够用但未做替换语义测试）、
+  - **跨会话 shell 已实现**（`src/Dougong.Agent/ShellTool.cs`）：11 项验收（`-- shell`）覆盖
+    退出码由进程报告、stdout/stderr 分离、args 不经 shell 解释、工作目录固定为工作区、
+    宿主密钥不进入子进程、声明 `WorkspaceExclusive` 与 `Execute`、取消与超时都结束进程树、
+    输出有界且标记截断、stdin 关闭不挂起、被工作区锁阻塞。
+  - shell 的两个反证确认检查有效：去掉 `Environment.Clear()` 立刻报密钥泄漏；
+    去掉结束进程树的调用，取消与超时两项同时失败。
+  - **shell 抓到一个真实安全缺陷**：`ProcessStartInfo.Environment` 初始就包含父进程的
+    全部变量，只往里加白名单项并不等于"只传这些"——`DOUGONG_PROVIDER_KEY` 会一起被继承，
+    模型可以执行一条命令把它读走。已改为先 `Clear()` 再填白名单。
+  - **不宣称隔离**：命令可以触达进程权限内的一切；本类只保证经过唯一 dispatcher、
+    取到工作区独占锁、结果如实上报。CLI 默认不启用 shell，需 `DOUGONG_SHELL=1` 显式开启。
+  - **未覆盖**：工具替换（`Register` 句柄够用但未做替换语义测试）、
     流式参数不全（已在 `-- contract` 的畸形 JSON/分片中覆盖，未单列）。
 - [ ] 上下文压缩：预算计算、保留工具配对、摘要失败不覆盖原历史、检查点可续跑。
   - 已实现（`src/Dougong.Agent/IContextCompactor.cs`、`ContextCompaction.cs`）：
@@ -173,7 +184,9 @@
     4. 审批被拒绝后同样触发第 3 条：拒绝也必须留下可解释的历史。
   - 会话命令：`--list` 列出会话（记录数、序号范围、缺口）、`--resume <会话>` 恢复、
     `--branch <会话> [--at N]` 分叉；会话可用完整路径、标识或序号（1 = 最新）指定。
-  - **未实现**：同目录多会话并行（当前一次只开一个会话）、shell 工具、
+  - shell 工具已接入（`DOUGONG_SHELL=1` 启用）。已用 DeepSeek 端到端验证：
+    模型请求执行命令 → 控制台审批显示具体命令与 `Execute` 权限 → 执行 → 退出码与真实输出回填。
+  - **未实现**：同目录多会话并行（当前一次只开一个会话）、
     用量成本记账（§5.1 的 OTel 聚合）。
 
 ## 桌面恢复与重连（设计已修订，未实现）
@@ -257,6 +270,10 @@
   9 项自检通过（含反证）；等待审批期间不持锁，避免慢审批阻塞工作区。
 - 2026-10-24：M1 提交屏障：`IAgentStore` 契约与 JSONL 实现，四个提交落点串起
   "先提交意图、再产生副作用"；6 项自检通过，并用移除屏障的反证确认测试有效。
+- 2026-10-24：M1 shell 工具：`ShellTool` + `ShellEnvironment` 落地，11 项验收（含两个反证）。
+  修掉一个真实安全缺陷：`ProcessStartInfo.Environment` 初始含父进程全部变量，
+  只加白名单不等于只传白名单，宿主密钥会被子进程继承。CLI 侧默认不启用，需显式开启。
+
 - 2026-10-24：依赖版本与测试栈核对：对照 NuGet 最新稳定版，AI 抽象 10.11.0 与 MAF 1.26.0
   已是最新；测试栈从 xUnit v2 + VSTest 迁到 xUnit v3 4.0.2 + Microsoft.Testing.Platform
   （删除 `Microsoft.NET.Test.Sdk` 与 `xunit.runner.visualstudio`）。迁移暴露并修复一个

@@ -39,6 +39,9 @@ public static class Program
         if (args.FirstOrDefault() == "session")
             return await SessionChecks.RunAsync();
 
+        if (args.FirstOrDefault() == "shell")
+            return await ShellChecks.RunAsync();
+
         var candidate = args.FirstOrDefault() ?? "b";
         Console.WriteLine($"candidate = {candidate}");
 

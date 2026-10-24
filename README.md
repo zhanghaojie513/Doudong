@@ -39,7 +39,7 @@ Dougong 目前处于 **实验性 Alpha 阶段**，目标框架为 `net10.0`。
 - 1 个内核测试工程
 - 3 个样例工程：基础插件、契约插件、共享契约
 - `Dougong.Telemetry` 尚未创建
-- `Dougong.Agent` 已实现循环、提交屏障、审批、资源协调、文件版本复核与上下文压缩
+- `Dougong.Agent` 已实现循环、提交屏障、审批、资源协调、文件版本复核、上下文压缩与 shell 工具
 - `Dougong.Ai` 已实现三种线协议连接器与 `ChatClientFactory`
 - `Dougong.Mcp`、`Dougong.Acp` 仍是骨架（M2）
 - `Dougong.Cli` 是可运行宿主：REPL + 审批 + 工作区内读写 + JSONL 会话，支持 resume / branch / list
@@ -126,7 +126,7 @@ dotnet test Dougong.slnx -c Release --no-build
 
 ```bash
 # 确定性自检套件（不联网）
-for m in wire session contract store approval fileversion compaction failure; do
+for m in wire session contract store approval fileversion compaction failure shell; do
   dotnet run --project spike/Dougong.Agent.Comparison -c Release --no-build -- $m
 done
 ```

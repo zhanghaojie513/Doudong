@@ -16,6 +16,7 @@ namespace Dougong.Cli;
 /// <item><c>DOUGONG_ANTHROPIC_PATH</c> 可选：Anthropic 兼容层路径，默认 <c>/v1/messages</c></item>
 /// <item><c>DOUGONG_WORKSPACE</c> 可选，默认当前目录</item>
 /// <item><c>DOUGONG_SESSION_DIR</c> 可选，默认 ~/.dougong/sessions</item>
+/// <item><c>DOUGONG_SHELL</c> 可选：设为 <c>1</c> 时启用 <c>shell</c> 工具（默认关闭）</item>
 /// </list>
 /// 会话参数：
 /// <list type="bullet">
@@ -134,9 +135,12 @@ public static class Program
             history = forked?.HistoryForResume ?? [];
         }
 
+        var shellEnabled = Environment.GetEnvironmentVariable("DOUGONG_SHELL") is "1" or "true";
+
         Console.WriteLine($"dougong 0.1.0-alpha.1  模型={config.Model}  协议={config.Protocol}");
         Console.WriteLine($"工作区={workspace}");
         Console.WriteLine($"会话={sessionPath}");
+        Console.WriteLine($"shell 工具={(shellEnabled ? "已启用" : "未启用（DOUGONG_SHELL=1 开启）")}");
 
         await using var store = await JsonlAgentStore.OpenAsync(sessionPath, sessionId)
             .ConfigureAwait(false);
@@ -148,9 +152,12 @@ public static class Program
             TimeSpan.FromMinutes(5),
             new WorkspacePathGuard(workspace));
 
-        // 注册最小工具集：只做工作区内文件读写，避免一上手就给 shell。
+        // 默认只给工作区内文件读写。shell 权限最大，必须显式开启：
+        // 它按 Execute 处理并取工作区独占锁，但无法把命令限制在工作区内。
         dispatcher.Register(new ReadFileTool(workspace));
         dispatcher.Register(new WriteFileTool(workspace));
+
+        if (shellEnabled) dispatcher.Register(new ShellTool(workspace));
 
         var runtime = new LoopAgentRuntime(client, dispatcher, store);
         var messages = new List<AgentMessage>(history);
